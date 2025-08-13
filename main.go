@@ -12,6 +12,9 @@ import (
 )
 
 func main() {
+	// Set log format to show only time without date
+	log.SetFlags(log.Ltime)
+
 	var (
 		sourceDB   = flag.String("source", "", "Source database connection string")
 		targetDB   = flag.String("target", "", "Target database connection string")

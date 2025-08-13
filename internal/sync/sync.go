@@ -127,7 +127,7 @@ func (s *Syncer) Sync() error {
 	}
 
 	if s.cfg.Verbose {
-		log.Printf("Found %d tables to sync: %v", len(tables), tables)
+		log.Printf("Found %d tables to sync: %s", len(tables), strings.Join(tables, ", "))
 	}
 
 	// Get table metadata for all tables
@@ -135,7 +135,7 @@ func (s *Syncer) Sync() error {
 	for _, tableName := range tables {
 		info, err := s.inspector.GetTableInfo(ctx, tableName)
 		if err != nil {
-			log.Printf("Warning: failed to get info for table %s: %v", tableName, err)
+			log.Printf("%s: warning - failed to get table info: %v", tableName, err)
 			continue
 		}
 		tableInfos = append(tableInfos, info)
@@ -175,14 +175,8 @@ func (s *Syncer) Sync() error {
 // worker processes table sync jobs
 func (s *Syncer) worker(ctx context.Context, workerID int, workChan <-chan *table.Info) {
 	for tableInfo := range workChan {
-		if s.cfg.Verbose {
-			log.Printf("Worker %d: Starting sync for table %s", workerID, tableInfo.Name)
-		}
-
 		if err := s.syncTable(ctx, tableInfo); err != nil {
-			log.Printf("Worker %d: Error syncing table %s: %v", workerID, tableInfo.Name, err)
-		} else if s.cfg.Verbose {
-			log.Printf("Worker %d: Completed sync for table %s", workerID, tableInfo.Name)
+			log.Printf("%s: error syncing - %v", tableInfo.Name, err)
 		}
 	}
 }
@@ -233,34 +227,36 @@ func (s *Syncer) getTablesList(ctx context.Context) ([]string, error) {
 func (s *Syncer) syncTable(ctx context.Context, tableInfo *table.Info) error {
 	tableName := tableInfo.Name
 
-	// Get last sync timestamp from state
-	lastSync, err := s.stateDB.GetLastSync(tableName)
-	if err != nil {
-		return fmt.Errorf("failed to get last sync timestamp: %w", err)
-	}
-
 	// Check if table has timestamp column
 	hasTimestamp := tableInfo.HasColumn(s.cfg.TimestampCol)
 
 	if !hasTimestamp {
-		log.Printf("Table %s has no %s column, skipping sync", tableName, s.cfg.TimestampCol)
+		log.Printf("%s: has no %s column, skipping sync", tableName, s.cfg.TimestampCol)
 		return nil
 	}
 
-	// If this is the first sync (lastSync is zero), initialize from target DB
-	if lastSync.IsZero() {
-		targetMaxTimestamp, err := s.getMaxTimestampFromTarget(ctx, tableName)
-		if err != nil {
-			return fmt.Errorf("failed to get max timestamp from target: %w", err)
-		}
-		if !targetMaxTimestamp.IsZero() {
-			lastSync = targetMaxTimestamp
-			if s.cfg.Verbose {
-				log.Printf("Initialized last sync timestamp for table %s from target DB: %v", tableName, lastSync)
-			}
-		}
+	// Always prefer timestamp from target DB for determining sync point
+	targetMaxTimestamp, err := s.getMaxTimestampFromTarget(ctx, tableName)
+	if err != nil {
+		return fmt.Errorf("failed to get max timestamp from target: %w", err)
 	}
-	return s.syncTableIncremental(ctx, tableInfo, lastSync)
+
+	var lastSync time.Time
+	var timestampSource string
+	if !targetMaxTimestamp.IsZero() {
+		// Use target DB timestamp as the starting point
+		lastSync = targetMaxTimestamp
+		timestampSource = "target DB"
+	} else {
+		// Fallback to SQLite state if target DB has no data
+		sqliteLastSync, err := s.stateDB.GetLastSync(tableName)
+		if err != nil {
+			return fmt.Errorf("failed to get last sync timestamp from state: %w", err)
+		}
+		lastSync = sqliteLastSync
+		timestampSource = "state DB"
+	}
+	return s.syncTableIncremental(ctx, tableInfo, lastSync, timestampSource)
 }
 
 // getMaxTimestampFromTarget gets the maximum timestamp from target table
@@ -290,7 +286,7 @@ func (s *Syncer) getMaxTimestampFromTarget(ctx context.Context, tableName string
 }
 
 // syncTableIncremental performs incremental sync based on timestamp
-func (s *Syncer) syncTableIncremental(ctx context.Context, tableInfo *table.Info, lastSync time.Time) error {
+func (s *Syncer) syncTableIncremental(ctx context.Context, tableInfo *table.Info, lastSync time.Time, timestampSource string) error {
 	tableName := tableInfo.Name
 
 	// First, handle deleted rows
@@ -306,13 +302,14 @@ func (s *Syncer) syncTableIncremental(ctx context.Context, tableInfo *table.Info
 
 	if minTS.IsZero() {
 		if s.cfg.Verbose {
-			log.Printf("No new data found for table %s", tableName)
+			log.Printf("%s: no new data found", tableName)
 		}
 		return nil
 	}
 
 	if s.cfg.Verbose {
-		log.Printf("Syncing table %s from %v to %v", tableName, minTS, maxTS)
+		log.Printf("%s: using last sync timestamp from %s (%s)", tableName, timestampSource, lastSync.Format(time.RFC3339))
+		log.Printf("%s: syncing from %s", tableName, minTS.Format(time.RFC3339))
 	}
 
 	// Process data in batches
@@ -350,7 +347,7 @@ func (s *Syncer) syncTableFull(ctx context.Context, tableInfo *table.Info) error
 func (s *Syncer) handleDeletedRows(ctx context.Context, tableInfo *table.Info) error {
 	if len(tableInfo.PrimaryKey) == 0 {
 		if s.cfg.Verbose {
-			log.Printf("Table %s has no primary key, skipping deleted rows handling", tableInfo.Name)
+			log.Printf("%s: has no primary key, skipping deleted rows handling", tableInfo.Name)
 		}
 		return nil
 	}
@@ -411,7 +408,7 @@ func (s *Syncer) handleDeletedRows(ctx context.Context, tableInfo *table.Info) e
 	// Delete rows that exist in target but not in source
 	if len(toDelete) > 0 {
 		if s.cfg.Verbose {
-			log.Printf("Deleting %d rows from table %s", len(toDelete), tableInfo.Name)
+			log.Printf("%s: deleting %d rows", tableInfo.Name, len(toDelete))
 		}
 
 		if !s.cfg.DryRun {
@@ -502,7 +499,7 @@ func (s *Syncer) processBatch(ctx context.Context, tableInfo *table.Info, fromTS
 	}
 
 	if s.cfg.Verbose {
-		log.Printf("Processing batch for table %s from %v to %v", tableInfo.Name, fromTS, actualEndTS)
+		log.Printf("%s: processing batch from %s", tableInfo.Name, fromTS.Format(time.RFC3339))
 	}
 
 	// Get data from source
@@ -520,10 +517,6 @@ func (s *Syncer) processBatch(ctx context.Context, tableInfo *table.Info, fromTS
 		if err := s.upsertData(ctx, tableInfo, rows); err != nil {
 			return time.Time{}, fmt.Errorf("failed to upsert data: %w", err)
 		}
-	}
-
-	if s.cfg.Verbose {
-		log.Printf("Processed %d rows for table %s", len(rows), tableInfo.Name)
 	}
 
 	return actualEndTS, nil
