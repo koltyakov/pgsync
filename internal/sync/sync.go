@@ -245,7 +245,18 @@ func (s *Syncer) syncTable(ctx context.Context, tableInfo *table.Info) error {
 	hasTimestamp := tableInfo.HasColumn(s.cfg.TimestampCol)
 
 	if !hasTimestamp {
-		log.Printf("%s: has no %s column, skipping sync", tableName, s.cfg.TimestampCol)
+		// For small tables (<1000 rows) with primary key, perform full upsert + deletion check
+		if len(tableInfo.PrimaryKey) == 0 {
+			log.Printf("%s: has no %s column and no primary key, skipping", tableName, s.cfg.TimestampCol)
+			return nil
+		}
+		if tableInfo.RowCount <= 1000 {
+			if s.cfg.Verbose {
+				log.Printf("%s: no %s column, small table (%d rows) — performing full sync", tableName, s.cfg.TimestampCol, tableInfo.RowCount)
+			}
+			return s.syncTableFullSmall(ctx, tableInfo)
+		}
+		log.Printf("%s: has no %s column and is large (~%d rows), skipping full sync", tableName, s.cfg.TimestampCol, tableInfo.RowCount)
 		return nil
 	}
 
@@ -267,6 +278,54 @@ func (s *Syncer) syncTable(ctx context.Context, tableInfo *table.Info) error {
 		timestampSource = "zero time (empty target)"
 	}
 	return s.syncTableIncremental(ctx, tableInfo, lastSync, timestampSource)
+}
+
+// syncTableFullSmall performs a full-table sync for small tables without a timestamp column
+func (s *Syncer) syncTableFullSmall(ctx context.Context, tableInfo *table.Info) error {
+	// Fetch all rows from source
+	rows, err := s.getAllSourceData(ctx, tableInfo)
+	if err != nil {
+		return fmt.Errorf("failed to fetch full data from source: %w", err)
+	}
+
+	if len(rows) > 0 {
+		if err := s.upsertData(ctx, tableInfo, rows); err != nil {
+			return fmt.Errorf("failed to upsert full data: %w", err)
+		}
+	}
+
+	// Reconcile deletions by IDs
+	if err := s.handleDeletedRows(ctx, tableInfo); err != nil {
+		return fmt.Errorf("failed to handle deletions in full sync: %w", err)
+	}
+
+	return nil
+}
+
+// getAllSourceData retrieves all rows for a table (no timestamp filter)
+func (s *Syncer) getAllSourceData(ctx context.Context, tableInfo *table.Info) ([][]any, error) {
+	columns := s.quotedColumnsList(tableInfo.Columns)
+	query := fmt.Sprintf("SELECT %s FROM %s", columns, s.quotedTableName(tableInfo.Name))
+
+	rows, err := s.sourceDB.QueryContext(ctx, query)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	var result [][]any
+	for rows.Next() {
+		values := make([]any, len(tableInfo.Columns))
+		scanArgs := make([]any, len(tableInfo.Columns))
+		for i := range values {
+			scanArgs[i] = &values[i]
+		}
+		if err := rows.Scan(scanArgs...); err != nil {
+			return nil, err
+		}
+		result = append(result, values)
+	}
+	return result, nil
 }
 
 // getMaxTimestampFromTarget gets the maximum timestamp from target table
@@ -353,8 +412,6 @@ func (s *Syncer) syncTableIncremental(ctx context.Context, tableInfo *table.Info
 			if err := s.handleDeletedRows(ctx, tableInfo); err != nil {
 				return fmt.Errorf("failed to handle deleted rows: %w", err)
 			}
-		} else if s.cfg.Verbose {
-			log.Printf("%s: target not fully caught up (target: %s, source: %s) - skipping deletion check", tableName, targetMaxTS.Format(time.RFC3339), sourceMaxTS.Format(time.RFC3339))
 		}
 
 		return nil
