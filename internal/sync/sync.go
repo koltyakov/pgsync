@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"log"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -43,6 +44,22 @@ func (s *Syncer) quotedColumnsList(columns []string) string {
 		quoted[i] = s.quotedColumnName(col)
 	}
 	return strings.Join(quoted, ", ")
+}
+
+// matchesPattern checks if a table name matches any of the given patterns (supports wildcards)
+func (s *Syncer) matchesPattern(tableName string, patterns []string) bool {
+	for _, pattern := range patterns {
+		pattern = strings.TrimSpace(pattern)
+		// Try direct match first (for backward compatibility)
+		if pattern == tableName {
+			return true
+		}
+		// Try wildcard match
+		if matched, err := filepath.Match(pattern, tableName); err == nil && matched {
+			return true
+		}
+	}
+	return false
 }
 
 // New creates a new Syncer instance
@@ -176,15 +193,10 @@ func (s *Syncer) getTablesList(ctx context.Context) ([]string, error) {
 	}
 
 	if len(s.cfg.IncludeTables) > 0 {
-		// Filter to only included tables
-		includeMap := make(map[string]bool)
-		for _, table := range s.cfg.IncludeTables {
-			includeMap[strings.TrimSpace(table)] = true
-		}
-
+		// Filter to only included tables (supports wildcards)
 		var filtered []string
 		for _, table := range allTables {
-			if includeMap[table] {
+			if s.matchesPattern(table, s.cfg.IncludeTables) {
 				filtered = append(filtered, table)
 			}
 		}
@@ -192,15 +204,10 @@ func (s *Syncer) getTablesList(ctx context.Context) ([]string, error) {
 	}
 
 	if len(s.cfg.ExcludeTables) > 0 {
-		// Filter out excluded tables
-		excludeMap := make(map[string]bool)
-		for _, table := range s.cfg.ExcludeTables {
-			excludeMap[strings.TrimSpace(table)] = true
-		}
-
+		// Filter out excluded tables (supports wildcards)
 		var filtered []string
 		for _, table := range allTables {
-			if !excludeMap[table] {
+			if !s.matchesPattern(table, s.cfg.ExcludeTables) {
 				filtered = append(filtered, table)
 			}
 		}

@@ -7,6 +7,6 @@
   "parallel": 4,
   "batchSize": 1000,
   "includeTables": [],
-  "excludeTables": ["audit_logs", "temp_tables"],
+  "excludeTables": ["audit_logs", "temp_*", "*_backup"],
   "verbose": false
 }

@@ -10,7 +10,7 @@ A powerful CLI application for synchronizing data between two PostgreSQL databas
 - **Upsert Operations**: Uses PostgreSQL's `ON CONFLICT` for efficient data updates
 - **State Management**: Uses target database timestamps for sync progress tracking
 - **Batch Processing**: Configurable batch sizes to minimize WAL impact
-- **Table Filtering**: Include/exclude specific tables from synchronization
+- **Table Filtering**: Include/exclude specific tables from synchronization with wildcard support
 - **Intelligent Deletion**: Tracks and removes obsolete records
 - **Parallel Processing**: Configurable worker pools for optimal performance
 - **Progress Tracking**: Real-time sync status and logging
@@ -39,8 +39,14 @@ go build -o pgsync
 # Include specific tables only
 ./pgsync -source "..." -target "..." -include "users,orders,products"
 
+# Include tables with wildcards
+./pgsync -source "..." -target "..." -include "user_*,order_*"
+
 # Exclude specific tables
 ./pgsync -source "..." -target "..." -exclude "logs,temp_data"
+
+# Exclude tables with wildcards  
+./pgsync -source "..." -target "..." -exclude "temp_*,*_log,audit_*"
 
 # Custom timestamp column
 ./pgsync -source "..." -target "..." -timestamp "modified_at"
@@ -79,13 +85,30 @@ Use with: `./pgsync -config config.json`
 | `-source` | Source database connection string | Required |
 | `-target` | Target database connection string | Required |
 | `-schema` | Schema to sync | `public` |
-| `-include` | Comma-separated list of tables to include | All tables |
-| `-exclude` | Comma-separated list of tables to exclude | None |
+| `-include` | Comma-separated list of tables to include (supports wildcards) | All tables |
+| `-exclude` | Comma-separated list of tables to exclude (supports wildcards) | None |
 | `-timestamp` | Timestamp column name for incremental sync | `updated_at` |
 | `-parallel` | Number of parallel sync sessions | `4` |
 | `-batch-size` | Batch size for data processing | `1000` |
 | `-verbose` | Enable verbose logging | `false` |
 | `-config` | Path to configuration file | None |
+
+## Wildcard Patterns
+
+The `-include` and `-exclude` options support standard shell wildcards:
+
+- `*` matches any sequence of characters
+- `?` matches any single character  
+- `[abc]` matches any character in the set
+- `[a-z]` matches any character in the range
+
+**Examples:**
+- `user_*` matches `user_profiles`, `user_settings`, etc.
+- `*_log` matches `access_log`, `error_log`, etc.
+- `temp_???` matches `temp_001`, `temp_abc`, etc.
+- `audit_[0-9]*` matches `audit_2023`, `audit_1_data`, etc.
+
+**Note:** Exact table names are always matched first for backward compatibility.
 
 ## How It Works
 
