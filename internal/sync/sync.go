@@ -104,7 +104,7 @@ func New(cfg *config.Config) (*Syncer, error) {
 		inspector:      inspector,
 		upsertsByTable: make(map[string]int64),
 		deletesByTable: make(map[string]int64),
-	skippedTables:  make([]string, 0),
+		skippedTables:  make([]string, 0),
 	}, nil
 }
 
@@ -313,8 +313,8 @@ func (s *Syncer) syncTable(ctx context.Context, tableInfo *table.Info) error {
 			}
 			return s.syncTableFullSmall(ctx, tableInfo)
 		}
-	log.Printf("%s: has no %s column and is large (~%d rows), skipping full sync", tableName, s.cfg.TimestampCol, tableInfo.RowCount)
-	s.addSkipped(tableName)
+		log.Printf("%s: has no %s column and is large (~%d rows), skipping full sync", tableName, s.cfg.TimestampCol, tableInfo.RowCount)
+		s.addSkipped(tableName)
 		return nil
 	}
 
@@ -634,8 +634,6 @@ func (s *Syncer) syncTableIncremental(ctx context.Context, tableInfo *table.Info
 		if err := s.handleDeletedRows(ctx, tableInfo); err != nil {
 			return fmt.Errorf("failed to handle deleted rows: %w", err)
 		}
-	} else if s.cfg.Verbose {
-		log.Printf("%s: sync completed, but target not fully caught up (target: %s, source: %s) - skipping deletion check", tableName, targetMaxTS.Format(time.RFC3339), sourceMaxTS.Format(time.RFC3339))
 	}
 
 	return nil
