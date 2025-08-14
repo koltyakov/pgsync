@@ -29,6 +29,7 @@ type Syncer struct {
 	deletesByTable map[string]int64
 	totalUpserts   int64
 	totalDeletes   int64
+	skippedTables  []string
 }
 
 // quotedTableName returns a properly quoted table name for PostgreSQL
@@ -103,6 +104,7 @@ func New(cfg *config.Config) (*Syncer, error) {
 		inspector:      inspector,
 		upsertsByTable: make(map[string]int64),
 		deletesByTable: make(map[string]int64),
+	skippedTables:  make([]string, 0),
 	}, nil
 }
 
@@ -189,6 +191,14 @@ func (s *Syncer) Sync() error {
 
 	elapsed := time.Since(start)
 	log.Printf("All table syncs completed in %s. Totals: synced %d rows, deleted %d rows", formatHumanDuration(elapsed), totalUpserts, totalDeletes)
+
+	// Log skipped tables if any
+	s.mu.Lock()
+	skipped := append([]string(nil), s.skippedTables...)
+	s.mu.Unlock()
+	if len(skipped) > 0 {
+		log.Printf("WARNING Tables skipped (%d): %s", len(skipped), strings.Join(skipped, ", "))
+	}
 	return nil
 }
 
@@ -299,11 +309,12 @@ func (s *Syncer) syncTable(ctx context.Context, tableInfo *table.Info) error {
 		}
 		if tableInfo.RowCount <= 1000 {
 			if s.cfg.Verbose {
-				log.Printf("%s: no %s column, small table (%d rows) — performing full sync", tableName, s.cfg.TimestampCol, tableInfo.RowCount)
+				log.Printf("%s: no %s column, small table (%d rows) — checking diff", tableName, s.cfg.TimestampCol, tableInfo.RowCount)
 			}
 			return s.syncTableFullSmall(ctx, tableInfo)
 		}
-		log.Printf("%s: has no %s column and is large (~%d rows), skipping full sync", tableName, s.cfg.TimestampCol, tableInfo.RowCount)
+	log.Printf("%s: has no %s column and is large (~%d rows), skipping full sync", tableName, s.cfg.TimestampCol, tableInfo.RowCount)
+	s.addSkipped(tableName)
 		return nil
 	}
 
@@ -1071,5 +1082,11 @@ func (s *Syncer) addDeletes(table string, n int) {
 	s.mu.Lock()
 	s.deletesByTable[table] += int64(n)
 	s.totalDeletes += int64(n)
+	s.mu.Unlock()
+}
+
+func (s *Syncer) addSkipped(table string) {
+	s.mu.Lock()
+	s.skippedTables = append(s.skippedTables, table)
 	s.mu.Unlock()
 }
