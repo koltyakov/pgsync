@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strings"
 	"sync"
@@ -284,21 +285,84 @@ func (s *Syncer) syncTable(ctx context.Context, tableInfo *table.Info) error {
 
 // syncTableFullSmall performs a full-table sync for small tables without a timestamp column
 func (s *Syncer) syncTableFullSmall(ctx context.Context, tableInfo *table.Info) error {
-	// Fetch all rows from source
-	rows, err := s.getAllSourceData(ctx, tableInfo)
+	// Fetch all rows from source and target
+	srcRows, err := s.getAllSourceData(ctx, tableInfo)
 	if err != nil {
 		return fmt.Errorf("failed to fetch full data from source: %w", err)
 	}
+	tgtRows, err := s.getAllTargetData(ctx, tableInfo)
+	if err != nil {
+		return fmt.Errorf("failed to fetch full data from target: %w", err)
+	}
 
-	if len(rows) > 0 {
-		if err := s.upsertData(ctx, tableInfo, rows); err != nil {
-			return fmt.Errorf("failed to upsert full data: %w", err)
+	// Build column index map for PK extraction
+	colIdx := make(map[string]int, len(tableInfo.Columns))
+	for i, c := range tableInfo.Columns {
+		colIdx[c] = i
+	}
+
+	// Index rows by PK composite key
+	srcMap := make(map[string][]any, len(srcRows))
+	for _, r := range srcRows {
+		// Derive PK key
+		pkVals := make([]any, len(tableInfo.PrimaryKey))
+		for i, pk := range tableInfo.PrimaryKey {
+			pkVals[i] = r[colIdx[pk]]
+		}
+		srcMap[s.createPKString(pkVals)] = r
+	}
+
+	tgtMap := make(map[string][]any, len(tgtRows))
+	for _, r := range tgtRows {
+		pkVals := make([]any, len(tableInfo.PrimaryKey))
+		for i, pk := range tableInfo.PrimaryKey {
+			pkVals[i] = r[colIdx[pk]]
+		}
+		tgtMap[s.createPKString(pkVals)] = r
+	}
+
+	// Determine changed/inserted rows and deletions
+	var toUpsert [][]any
+	for pk, srow := range srcMap {
+		if trow, ok := tgtMap[pk]; !ok {
+			toUpsert = append(toUpsert, srow) // insert
+		} else if !rowsEqual(srow, trow) {
+			toUpsert = append(toUpsert, srow) // update
 		}
 	}
 
-	// Reconcile deletions by IDs
-	if err := s.handleDeletedRows(ctx, tableInfo); err != nil {
-		return fmt.Errorf("failed to handle deletions in full sync: %w", err)
+	var toDelete [][]any
+	for pk, trow := range tgtMap {
+		if _, ok := srcMap[pk]; !ok {
+			// Extract PK values in order for delete
+			pkVals := make([]any, len(tableInfo.PrimaryKey))
+			for i, pkName := range tableInfo.PrimaryKey {
+				pkVals[i] = trow[colIdx[pkName]]
+			}
+			toDelete = append(toDelete, pkVals)
+		}
+	}
+
+	// Apply changes
+	if len(toUpsert) > 0 {
+		if err := s.upsertData(ctx, tableInfo, toUpsert); err != nil {
+			return fmt.Errorf("failed to upsert changed rows: %w", err)
+		}
+	}
+	if len(toDelete) > 0 {
+		if err := s.deleteRows(ctx, tableInfo, toDelete); err != nil {
+			return fmt.Errorf("failed to delete rows: %w", err)
+		}
+		s.addDeletes(tableInfo.Name, len(toDelete))
+	}
+
+	// Verbose summary
+	if s.cfg.Verbose {
+		if len(toUpsert) == 0 && len(toDelete) == 0 {
+			log.Printf("%s: small-table diff — no changes", tableInfo.Name)
+		} else {
+			log.Printf("%s: small-table diff — changed %d, deleted %d", tableInfo.Name, len(toUpsert), len(toDelete))
+		}
 	}
 
 	return nil
@@ -328,6 +392,45 @@ func (s *Syncer) getAllSourceData(ctx context.Context, tableInfo *table.Info) ([
 		result = append(result, values)
 	}
 	return result, nil
+}
+
+// getAllTargetData retrieves all rows from the target table
+func (s *Syncer) getAllTargetData(ctx context.Context, tableInfo *table.Info) ([][]any, error) {
+	columns := s.quotedColumnsList(tableInfo.Columns)
+	query := fmt.Sprintf("SELECT %s FROM %s", columns, s.quotedTableName(tableInfo.Name))
+
+	rows, err := s.targetDB.QueryContext(ctx, query)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	var result [][]any
+	for rows.Next() {
+		values := make([]any, len(tableInfo.Columns))
+		scanArgs := make([]any, len(tableInfo.Columns))
+		for i := range values {
+			scanArgs[i] = &values[i]
+		}
+		if err := rows.Scan(scanArgs...); err != nil {
+			return nil, err
+		}
+		result = append(result, values)
+	}
+	return result, nil
+}
+
+// rowsEqual compares two database rows by value
+func rowsEqual(a, b []any) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if !reflect.DeepEqual(a[i], b[i]) {
+			return false
+		}
+	}
+	return true
 }
 
 // getMaxTimestampFromTarget gets the maximum timestamp from target table
