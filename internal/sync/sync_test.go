@@ -95,7 +95,7 @@ func TestMatchesPattern(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			result := syncer.matchesPattern(tt.tableName, tt.patterns)
 			if result != tt.expected {
-				t.Errorf("matchesPattern(%q, %v) = %v, expected %v", 
+				t.Errorf("matchesPattern(%q, %v) = %v, expected %v",
 					tt.tableName, tt.patterns, result, tt.expected)
 			}
 		})
