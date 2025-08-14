@@ -19,10 +19,15 @@ import (
 
 // Syncer handles the synchronization between two PostgreSQL databases
 type Syncer struct {
-	cfg       *config.Config
-	sourceDB  *sql.DB
-	targetDB  *sql.DB
-	inspector *db.Inspector
+	cfg            *config.Config
+	sourceDB       *sql.DB
+	targetDB       *sql.DB
+	inspector      *db.Inspector
+	mu             sync.Mutex
+	upsertsByTable map[string]int64
+	deletesByTable map[string]int64
+	totalUpserts   int64
+	totalDeletes   int64
 }
 
 // quotedTableName returns a properly quoted table name for PostgreSQL
@@ -91,10 +96,12 @@ func New(cfg *config.Config) (*Syncer, error) {
 	inspector := db.NewInspector(sourceDB, targetDB, cfg.Schema)
 
 	return &Syncer{
-		cfg:       cfg,
-		sourceDB:  sourceDB,
-		targetDB:  targetDB,
-		inspector: inspector,
+		cfg:            cfg,
+		sourceDB:       sourceDB,
+		targetDB:       targetDB,
+		inspector:      inspector,
+		upsertsByTable: make(map[string]int64),
+		deletesByTable: make(map[string]int64),
 	}, nil
 }
 
@@ -172,7 +179,13 @@ func (s *Syncer) Sync() error {
 	// Wait for all workers to complete
 	wg.Wait()
 
-	log.Println("All table syncs completed")
+	// Log totals
+	s.mu.Lock()
+	totalUpserts := s.totalUpserts
+	totalDeletes := s.totalDeletes
+	s.mu.Unlock()
+
+	log.Printf("All table syncs completed. Totals: synced %d rows, deleted %d rows", totalUpserts, totalDeletes)
 	return nil
 }
 
@@ -220,6 +233,13 @@ func (s *Syncer) getTablesList(ctx context.Context) ([]string, error) {
 // syncTable synchronizes a single table
 func (s *Syncer) syncTable(ctx context.Context, tableInfo *table.Info) error {
 	tableName := tableInfo.Name
+
+	// Capture baseline counts and always log per-table delta at exit
+	preUp, preDel := s.tableCounts(tableName)
+	defer func() {
+		postUp, postDel := s.tableCounts(tableName)
+		log.Printf("%s: synced %d rows, deleted %d rows", tableName, postUp-preUp, postDel-preDel)
+	}()
 
 	// Check if table has timestamp column
 	hasTimestamp := tableInfo.HasColumn(s.cfg.TimestampCol)
@@ -459,6 +479,8 @@ func (s *Syncer) handleDeletedRows(ctx context.Context, tableInfo *table.Info) e
 		if err := s.deleteRows(ctx, tableInfo, toDelete); err != nil {
 			return fmt.Errorf("failed to delete rows: %w", err)
 		}
+
+		s.addDeletes(tableInfo.Name, len(toDelete))
 	}
 
 	return nil
@@ -677,6 +699,8 @@ func (s *Syncer) upsertData(ctx context.Context, tableInfo *table.Info, rows [][
 		}
 	}
 
+	s.addUpserts(tableInfo.Name, len(rows))
+
 	return nil
 }
 
@@ -717,4 +741,31 @@ func (s *Syncer) buildUpsertQuery(tableInfo *table.Info) string {
 		s.quotedTableName(tableInfo.Name), columns, placeholderStr, conflictCols, updateClause)
 
 	return query
+}
+
+// tableCounts returns current counts for a table
+func (s *Syncer) tableCounts(table string) (int64, int64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.upsertsByTable[table], s.deletesByTable[table]
+}
+
+func (s *Syncer) addUpserts(table string, n int) {
+	if n <= 0 {
+		return
+	}
+	s.mu.Lock()
+	s.upsertsByTable[table] += int64(n)
+	s.totalUpserts += int64(n)
+	s.mu.Unlock()
+}
+
+func (s *Syncer) addDeletes(table string, n int) {
+	if n <= 0 {
+		return
+	}
+	s.mu.Lock()
+	s.deletesByTable[table] += int64(n)
+	s.totalDeletes += int64(n)
+	s.mu.Unlock()
 }
