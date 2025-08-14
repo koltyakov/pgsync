@@ -1113,11 +1113,11 @@ func (s *Syncer) writeIntegrityCSV(ctx context.Context, tables []*table.Info) er
 	// Header
 	header := []string{
 		"Table Name",
-		"Source Rows", "Target Rows",
-		"Source min(id)", "Target min(id)",
-		"Source max(id)", "Target max(id)",
-		"Source min(ts)", "Target min(ts)",
-		"Source max(ts)", "Target max(ts)",
+		"Source Rows", "Target Rows", "Rows match",
+		"Source min(id)", "Target min(id)", "min(id) match",
+		"Source max(id)", "Target max(id)", "max(id) match",
+		"Source min(ts)", "Target min(ts)", "min(ts) match",
+		"Source max(ts)", "Target max(ts)", "max(ts) match",
 	}
 	if err := w.Write(header); err != nil {
 		return err
@@ -1136,6 +1136,7 @@ func (s *Syncer) writeIntegrityCSV(ctx context.Context, tables []*table.Info) er
 
 		// ID column min/max (best-effort: single-column PK or column named 'id')
 		var srcMinID, srcMaxID, tgtMinID, tgtMaxID string
+		var idMinMatch, idMaxMatch string
 		if idCol, ok := s.findIDColumn(info); ok {
 			if srcMinID, srcMaxID, err = s.getMinMaxAsText(ctx, s.sourceDB, info.Name, idCol); err != nil {
 				return fmt.Errorf("%s: failed to get source id min/max: %w", info.Name, err)
@@ -1143,12 +1144,27 @@ func (s *Syncer) writeIntegrityCSV(ctx context.Context, tables []*table.Info) er
 			if tgtMinID, tgtMaxID, err = s.getMinMaxAsText(ctx, s.targetDB, info.Name, idCol); err != nil {
 				return fmt.Errorf("%s: failed to get target id min/max: %w", info.Name, err)
 			}
+			if srcMinID != "" || tgtMinID != "" {
+				if srcMinID == tgtMinID {
+					idMinMatch = "Yes"
+				} else {
+					idMinMatch = "No"
+				}
+			}
+			if srcMaxID != "" || tgtMaxID != "" {
+				if srcMaxID == tgtMaxID {
+					idMaxMatch = "Yes"
+				} else {
+					idMaxMatch = "No"
+				}
+			}
 		} else {
 			// leave as empty strings if no suitable id column
 		}
 
 		// Timestamp min/max if column exists
 		var srcMinTS, srcMaxTS, tgtMinTS, tgtMaxTS string
+		var tsMinMatch, tsMaxMatch string
 		if info.HasColumn(s.cfg.TimestampCol) && s.cfg.TimestampCol != "" {
 			if srcMinTS, srcMaxTS, err = s.getMinMaxAsText(ctx, s.sourceDB, info.Name, s.cfg.TimestampCol); err != nil {
 				return fmt.Errorf("%s: failed to get source ts min/max: %w", info.Name, err)
@@ -1156,15 +1172,34 @@ func (s *Syncer) writeIntegrityCSV(ctx context.Context, tables []*table.Info) er
 			if tgtMinTS, tgtMaxTS, err = s.getMinMaxAsText(ctx, s.targetDB, info.Name, s.cfg.TimestampCol); err != nil {
 				return fmt.Errorf("%s: failed to get target ts min/max: %w", info.Name, err)
 			}
+			if srcMinTS != "" || tgtMinTS != "" {
+				if srcMinTS == tgtMinTS {
+					tsMinMatch = "Yes"
+				} else {
+					tsMinMatch = "No"
+				}
+			}
+			if srcMaxTS != "" || tgtMaxTS != "" {
+				if srcMaxTS == tgtMaxTS {
+					tsMaxMatch = "Yes"
+				} else {
+					tsMaxMatch = "No"
+				}
+			}
+		}
+
+		rowsMatch := "No"
+		if srcRows == tgtRows {
+			rowsMatch = "Yes"
 		}
 
 		rec := []string{
 			info.Name,
-			fmt.Sprintf("%d", srcRows), fmt.Sprintf("%d", tgtRows),
-			srcMinID, tgtMinID,
-			srcMaxID, tgtMaxID,
-			srcMinTS, tgtMinTS,
-			srcMaxTS, tgtMaxTS,
+			fmt.Sprintf("%d", srcRows), fmt.Sprintf("%d", tgtRows), rowsMatch,
+			srcMinID, tgtMinID, idMinMatch,
+			srcMaxID, tgtMaxID, idMaxMatch,
+			srcMinTS, tgtMinTS, tsMinMatch,
+			srcMaxTS, tgtMaxTS, tsMaxMatch,
 		}
 		if err := w.Write(rec); err != nil {
 			return err
