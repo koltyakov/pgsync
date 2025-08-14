@@ -12,7 +12,6 @@ import (
 
 	"github.com/koltyakov/pgsync/internal/config"
 	"github.com/koltyakov/pgsync/internal/db"
-	"github.com/koltyakov/pgsync/internal/state"
 	"github.com/koltyakov/pgsync/internal/table"
 	_ "github.com/lib/pq"
 )
@@ -22,7 +21,6 @@ type Syncer struct {
 	cfg       *config.Config
 	sourceDB  *sql.DB
 	targetDB  *sql.DB
-	stateDB   *state.StateDB
 	inspector *db.Inspector
 }
 
@@ -73,20 +71,12 @@ func New(cfg *config.Config) (*Syncer, error) {
 		return nil, fmt.Errorf("failed to ping target database: %w", err)
 	}
 
-	stateDB, err := state.New(cfg.StateDB)
-	if err != nil {
-		sourceDB.Close()
-		targetDB.Close()
-		return nil, fmt.Errorf("failed to initialize state database: %w", err)
-	}
-
 	inspector := db.NewInspector(sourceDB, targetDB, cfg.Schema)
 
 	return &Syncer{
 		cfg:       cfg,
 		sourceDB:  sourceDB,
 		targetDB:  targetDB,
-		stateDB:   stateDB,
 		inspector: inspector,
 	}, nil
 }
@@ -100,9 +90,6 @@ func (s *Syncer) Close() error {
 	}
 	if err := s.targetDB.Close(); err != nil {
 		errs = append(errs, fmt.Sprintf("target DB: %v", err))
-	}
-	if err := s.stateDB.Close(); err != nil {
-		errs = append(errs, fmt.Sprintf("state DB: %v", err))
 	}
 
 	if len(errs) > 0 {
@@ -248,13 +235,9 @@ func (s *Syncer) syncTable(ctx context.Context, tableInfo *table.Info) error {
 		lastSync = targetMaxTimestamp
 		timestampSource = "target DB"
 	} else {
-		// Fallback to SQLite state if target DB has no data
-		sqliteLastSync, err := s.stateDB.GetLastSync(tableName)
-		if err != nil {
-			return fmt.Errorf("failed to get last sync timestamp from state: %w", err)
-		}
-		lastSync = sqliteLastSync
-		timestampSource = "state DB"
+		// If target DB has no data, start from zero time
+		lastSync = time.Time{}
+		timestampSource = "zero time (empty target)"
 	}
 	return s.syncTableIncremental(ctx, tableInfo, lastSync, timestampSource)
 }
@@ -363,10 +346,8 @@ func (s *Syncer) syncTableIncremental(ctx context.Context, tableInfo *table.Info
 			return fmt.Errorf("failed to process batch: %w", err)
 		}
 
-		// Update last sync timestamp
-		if err := s.stateDB.SetLastSync(tableName, nextTS); err != nil {
-			return fmt.Errorf("failed to update last sync timestamp: %w", err)
-		}
+		// Log processing progress
+		log.Printf("[%s] %s - Processed batch, current timestamp: %s", time.Now().Format(time.RFC3339), tableName, nextTS.Format(time.RFC3339))
 
 		currentTS = nextTS.Add(time.Microsecond) // Move slightly forward to avoid duplicate processing
 	}
@@ -468,10 +449,8 @@ func (s *Syncer) handleDeletedRows(ctx context.Context, tableInfo *table.Info) e
 			log.Printf("%s: deleting %d rows", tableInfo.Name, len(toDelete))
 		}
 
-		if !s.cfg.DryRun {
-			if err := s.deleteRows(ctx, tableInfo, toDelete); err != nil {
-				return fmt.Errorf("failed to delete rows: %w", err)
-			}
+		if err := s.deleteRows(ctx, tableInfo, toDelete); err != nil {
+			return fmt.Errorf("failed to delete rows: %w", err)
 		}
 	}
 
@@ -570,10 +549,8 @@ func (s *Syncer) processBatch(ctx context.Context, tableInfo *table.Info, fromTS
 	}
 
 	// Upsert data to target
-	if !s.cfg.DryRun {
-		if err := s.upsertData(ctx, tableInfo, rows); err != nil {
-			return time.Time{}, fmt.Errorf("failed to upsert data: %w", err)
-		}
+	if err := s.upsertData(ctx, tableInfo, rows); err != nil {
+		return time.Time{}, fmt.Errorf("failed to upsert data: %w", err)
 	}
 
 	return actualEndTS, nil

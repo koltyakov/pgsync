@@ -8,6 +8,5 @@
   "batchSize": 1000,
   "includeTables": [],
   "excludeTables": ["audit_logs", "temp_tables"],
-  "verbose": false,
-  "stateDb": "./pgsync.db"
+  "verbose": false
 }

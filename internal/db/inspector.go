@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"strings"
 
 	"github.com/koltyakov/pgsync/internal/table"
 )
@@ -160,85 +159,4 @@ func (i *Inspector) getRowCount(ctx context.Context, tableName string) (int64, e
 		return count.Int64, nil
 	}
 	return 0, nil
-}
-
-// TableExists checks if a table exists in the target database
-func (i *Inspector) TableExists(ctx context.Context, tableName string) (bool, error) {
-	query := `
-		SELECT EXISTS (
-			SELECT 1 
-			FROM information_schema.tables 
-			WHERE table_schema = $1 AND table_name = $2
-		)`
-
-	var exists bool
-	err := i.targetDB.QueryRowContext(ctx, query, i.schema, tableName).Scan(&exists)
-	return exists, err
-}
-
-// CreateTableIfNotExists creates a table in target database if it doesn't exist
-func (i *Inspector) CreateTableIfNotExists(ctx context.Context, tableName string) error {
-	exists, err := i.TableExists(ctx, tableName)
-	if err != nil {
-		return err
-	}
-
-	if exists {
-		return nil
-	}
-
-	// Get CREATE TABLE statement from source
-	createTableSQL, err := i.getCreateTableSQL(ctx, tableName)
-	if err != nil {
-		return fmt.Errorf("failed to get CREATE TABLE SQL: %w", err)
-	}
-
-	// Execute CREATE TABLE on target
-	_, err = i.targetDB.ExecContext(ctx, createTableSQL)
-	if err != nil {
-		return fmt.Errorf("failed to create table: %w", err)
-	}
-
-	return nil
-}
-
-// getCreateTableSQL extracts CREATE TABLE SQL from source database
-func (i *Inspector) getCreateTableSQL(ctx context.Context, tableName string) (string, error) {
-	// This is a simplified version - in practice you'd want to get the full DDL
-	query := `
-		SELECT 
-			'CREATE TABLE ' || $1 || '.' || $2 || ' (' ||
-			string_agg(
-				column_name || ' ' || 
-				CASE 
-					WHEN data_type = 'character varying' THEN 'varchar(' || character_maximum_length || ')'
-					WHEN data_type = 'character' THEN 'char(' || character_maximum_length || ')'
-					WHEN data_type = 'numeric' THEN 'numeric(' || numeric_precision || ',' || numeric_scale || ')'
-					ELSE data_type 
-				END ||
-				CASE WHEN is_nullable = 'NO' THEN ' NOT NULL' ELSE '' END,
-				', '
-				ORDER BY ordinal_position
-			) || ')'
-		FROM information_schema.columns 
-		WHERE table_schema = $1 AND table_name = $2`
-
-	var createSQL string
-	err := i.sourceDB.QueryRowContext(ctx, query, i.schema, tableName).Scan(&createSQL)
-	if err != nil {
-		return "", err
-	}
-
-	// Add primary key constraint if exists
-	primaryKey, err := i.getPrimaryKey(ctx, tableName)
-	if err != nil {
-		return "", err
-	}
-
-	if len(primaryKey) > 0 {
-		pkClause := fmt.Sprintf(", PRIMARY KEY (%s)", strings.Join(primaryKey, ", "))
-		createSQL = strings.TrimSuffix(createSQL, ")") + pkClause + ")"
-	}
-
-	return createSQL, nil
 }

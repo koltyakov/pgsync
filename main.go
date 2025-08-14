@@ -24,10 +24,8 @@ func main() {
 		timestamp  = flag.String("timestamp", "updated_at", "Timestamp column name for incremental sync")
 		parallel   = flag.Int("parallel", 4, "Number of parallel sync sessions")
 		batchSize  = flag.Int("batch-size", 1000, "Batch size for data processing")
-		dryRun     = flag.Bool("dry-run", false, "Perform a dry run without actual data changes")
 		verbose    = flag.Bool("verbose", false, "Enable verbose logging")
 		configFile = flag.String("config", "", "Path to configuration file")
-		stateDB    = flag.String("state-db", "./pgsync.db", "SQLite database path for state management")
 	)
 
 	flag.Parse()
@@ -39,9 +37,7 @@ func main() {
 		TimestampCol: *timestamp,
 		Parallel:     *parallel,
 		BatchSize:    *batchSize,
-		DryRun:       *dryRun,
 		Verbose:      *verbose,
-		StateDB:      *stateDB,
 	}
 
 	if *include != "" {

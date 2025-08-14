@@ -9,14 +9,14 @@ import (
 func TestLoadFromFile(t *testing.T) {
 	// Create a temporary config file
 	configContent := `{
-		"source_db": "postgres://test:test@localhost:5432/source",
-		"target_db": "postgres://test:test@localhost:5432/target",
+		"sourceDb": "postgres://test:test@localhost:5432/source",
+		"targetDb": "postgres://test:test@localhost:5432/target",
 		"schema": "test_schema",
-		"timestamp_column": "modified_at",
+		"timestampColumn": "modified_at",
 		"parallel": 8,
-		"batch_size": 2000,
-		"include_tables": ["table1", "table2"],
-		"exclude_tables": ["table3"],
+		"batchSize": 2000,
+		"includeTables": ["table1", "table2"],
+		"excludeTables": ["table3"],
 		"verbose": true
 	}`
 
@@ -67,7 +67,6 @@ func TestSaveToFile(t *testing.T) {
 		IncludeTables: []string{"users", "orders"},
 		ExcludeTables: []string{"logs"},
 		Verbose:       false,
-		StateDB:       "./test.db",
 	}
 
 	tmpFile, err := os.CreateTemp("", "test_save_config_*.json")

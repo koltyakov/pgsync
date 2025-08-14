@@ -8,10 +8,12 @@ A powerful CLI application for synchronizing data between two PostgreSQL databas
 - **Parallel Processing**: Multiple worker goroutines for efficient table synchronization
 - **Deleted Row Tracking**: Detects and removes deleted rows from target database
 - **Upsert Operations**: Uses PostgreSQL's `ON CONFLICT` for efficient data updates
-- **State Management**: SQLite database tracks sync progress and history
+- **State Management**: Uses target database timestamps for sync progress tracking
 - **Batch Processing**: Configurable batch sizes to minimize WAL impact
 - **Table Filtering**: Include/exclude specific tables from synchronization
-- **Dry Run Mode**: Test synchronization without making changes
+- **Intelligent Deletion**: Tracks and removes obsolete records
+- **Parallel Processing**: Configurable worker pools for optimal performance
+- **Progress Tracking**: Real-time sync status and logging
 - **Timestamp Consistency**: Ensures all rows with same timestamp are synchronized together
 
 ## Installation
@@ -45,9 +47,6 @@ go build -o pgsync
 
 # Parallel processing with 8 workers
 ./pgsync -source "..." -target "..." -parallel 8
-
-# Dry run to see what would be synchronized
-./pgsync -source "..." -target "..." -dry-run
 
 # Verbose logging
 ./pgsync -source "..." -target "..." -verbose
@@ -85,10 +84,8 @@ Use with: `./pgsync -config config.json`
 | `-timestamp` | Timestamp column name for incremental sync | `updated_at` |
 | `-parallel` | Number of parallel sync sessions | `4` |
 | `-batch-size` | Batch size for data processing | `1000` |
-| `-dry-run` | Perform a dry run without actual changes | `false` |
 | `-verbose` | Enable verbose logging | `false` |
 | `-config` | Path to configuration file | None |
-| `-state-db` | SQLite database path for state management | `./pgsync.db` |
 
 ## How It Works
 
@@ -115,7 +112,7 @@ Use with: `./pgsync -config config.json`
 - Load balances based on estimated table complexity
 
 ### 6. State Management
-- SQLite database tracks sync progress
+- Target database timestamps track sync progress
 - Resumes from last successful point on failures
 - Maintains sync history and logs
 
@@ -160,17 +157,15 @@ postgres://user:pass@host:5432/db?sslmode=disable&connect_timeout=10
 
 ## Monitoring
 
-The SQLite state database contains:
-- Sync timestamps for each table
-- Detailed sync logs with timing and row counts
-- Error history for troubleshooting
+The sync process provides comprehensive logging:
+- Sync timestamps for each table tracked via target database
+- Detailed sync logs with timing and row counts using ISO timestamps
+- Error history and verbose progress reporting
 
-Query the state database:
-```sql
--- View last sync times
-SELECT * FROM sync_state;
-
--- View sync history
+Monitor sync progress through log output:
+```
+[2024-12-13T15:30:45Z] users - Starting incremental sync from target DB timestamp: 2024-12-13T15:25:30Z
+[2024-12-13T15:30:46Z] users - Processed batch, current timestamp: 2024-12-13T15:30:45Z
 SELECT * FROM sync_log ORDER BY start_time DESC;
 ```
 

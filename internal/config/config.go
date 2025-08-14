@@ -15,9 +15,7 @@ type Config struct {
 	TimestampCol  string   `json:"timestampColumn"`
 	Parallel      int      `json:"parallel"`
 	BatchSize     int      `json:"batchSize"`
-	DryRun        bool     `json:"dryRun"`
 	Verbose       bool     `json:"verbose"`
-	StateDB       string   `json:"stateDb"`
 }
 
 // LoadFromFile loads configuration from a JSON file

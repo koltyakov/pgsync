@@ -85,14 +85,6 @@ install: build
 	@echo "Installing $(BINARY_NAME)..."
 	@cp $(BUILD_DIR)/$(BINARY_NAME) $(GOPATH)/bin/
 
-docker-build:
-	@echo "Building Docker image..."
-	docker build -t pgsync:latest .
-
-docker-run:
-	@echo "Running Docker container..."
-	docker run --rm -it pgsync:latest
-
 help:
 	@echo "Available targets:"
 	@echo "  build        - Build the binary"
@@ -106,5 +98,4 @@ help:
 	@echo "  lint         - Run linter"
 	@echo "  vet          - Run go vet"
 	@echo "  install      - Install binary to GOPATH"
-	@echo "  docker-build - Build Docker image"
-	@echo "  docker-run   - Run Docker container"
+
