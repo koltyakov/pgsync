@@ -7,17 +7,17 @@ import (
 
 // Config holds the application configuration
 type Config struct {
-	SourceDB      string   `json:"source_db"`
-	TargetDB      string   `json:"target_db"`
+	SourceDB      string   `json:"sourceDb"`
+	TargetDB      string   `json:"targetDb"`
 	Schema        string   `json:"schema"`
-	IncludeTables []string `json:"include_tables"`
-	ExcludeTables []string `json:"exclude_tables"`
-	TimestampCol  string   `json:"timestamp_column"`
+	IncludeTables []string `json:"includeTables"`
+	ExcludeTables []string `json:"excludeTables"`
+	TimestampCol  string   `json:"timestampColumn"`
 	Parallel      int      `json:"parallel"`
-	BatchSize     int      `json:"batch_size"`
-	DryRun        bool     `json:"dry_run"`
+	BatchSize     int      `json:"batchSize"`
+	DryRun        bool     `json:"dryRun"`
 	Verbose       bool     `json:"verbose"`
-	StateDB       string   `json:"state_db"`
+	StateDB       string   `json:"stateDb"`
 }
 
 // LoadFromFile loads configuration from a JSON file

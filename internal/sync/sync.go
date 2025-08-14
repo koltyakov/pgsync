@@ -285,14 +285,31 @@ func (s *Syncer) getMaxTimestampFromTarget(ctx context.Context, tableName string
 	return maxTS, nil
 }
 
+// getSourceMaxTimestamp gets the maximum timestamp from source table
+func (s *Syncer) getSourceMaxTimestamp(ctx context.Context, tableName string) (time.Time, error) {
+	query := fmt.Sprintf(`
+		SELECT COALESCE(MAX(%s), '1970-01-01'::timestamp) 
+		FROM %s`,
+		s.quotedColumnName(s.cfg.TimestampCol), s.quotedTableName(tableName))
+
+	var maxTS time.Time
+	err := s.sourceDB.QueryRowContext(ctx, query).Scan(&maxTS)
+	if err != nil {
+		return time.Time{}, err
+	}
+
+	// If the result is the epoch time (1970-01-01), treat it as zero
+	epoch := time.Date(1970, 1, 1, 0, 0, 0, 0, time.UTC)
+	if maxTS.Equal(epoch) {
+		return time.Time{}, nil
+	}
+
+	return maxTS, nil
+}
+
 // syncTableIncremental performs incremental sync based on timestamp
 func (s *Syncer) syncTableIncremental(ctx context.Context, tableInfo *table.Info, lastSync time.Time, timestampSource string) error {
 	tableName := tableInfo.Name
-
-	// First, handle deleted rows
-	if err := s.handleDeletedRows(ctx, tableInfo); err != nil {
-		return fmt.Errorf("failed to handle deleted rows: %w", err)
-	}
 
 	// Get the range of timestamps to process
 	minTS, maxTS, err := s.getTimestampRange(ctx, tableName, lastSync)
@@ -304,6 +321,32 @@ func (s *Syncer) syncTableIncremental(ctx context.Context, tableInfo *table.Info
 		if s.cfg.Verbose {
 			log.Printf("%s: no new data found", tableName)
 		}
+
+		// Even when there's no new data, check if we should handle deletions
+		// Get source max timestamp to compare with target
+		sourceMaxTS, err := s.getSourceMaxTimestamp(ctx, tableName)
+		if err != nil {
+			return fmt.Errorf("failed to get source max timestamp: %w", err)
+		}
+
+		// Get target max timestamp
+		targetMaxTS, err := s.getMaxTimestampFromTarget(ctx, tableName)
+		if err != nil {
+			return fmt.Errorf("failed to get target max timestamp: %w", err)
+		}
+
+		// Only handle deletions if target is caught up with source
+		if !targetMaxTS.IsZero() && !sourceMaxTS.IsZero() && (targetMaxTS.Equal(sourceMaxTS) || targetMaxTS.After(sourceMaxTS)) {
+			if s.cfg.Verbose {
+				log.Printf("%s: checking for deletions", tableName)
+			}
+			if err := s.handleDeletedRows(ctx, tableInfo); err != nil {
+				return fmt.Errorf("failed to handle deleted rows: %w", err)
+			}
+		} else if s.cfg.Verbose {
+			log.Printf("%s: target not fully caught up (target: %s, source: %s) - skipping deletion check", tableName, targetMaxTS.Format(time.RFC3339), sourceMaxTS.Format(time.RFC3339))
+		}
+
 		return nil
 	}
 
@@ -328,19 +371,33 @@ func (s *Syncer) syncTableIncremental(ctx context.Context, tableInfo *table.Info
 		currentTS = nextTS.Add(time.Microsecond) // Move slightly forward to avoid duplicate processing
 	}
 
-	return nil
-}
-
-// syncTableFull performs full table comparison and sync
-func (s *Syncer) syncTableFull(ctx context.Context, tableInfo *table.Info) error {
-	// Handle deleted rows
-	if err := s.handleDeletedRows(ctx, tableInfo); err != nil {
-		return fmt.Errorf("failed to handle deleted rows: %w", err)
+	// After successful incremental sync, check if we should handle deletions
+	// Get source max timestamp to compare with target
+	sourceMaxTS, err := s.getSourceMaxTimestamp(ctx, tableName)
+	if err != nil {
+		return fmt.Errorf("failed to get source max timestamp: %w", err)
 	}
 
-	// For tables without timestamp, we need to compare all data
-	// This is more expensive but necessary for consistency
-	return s.compareAndSyncFullTable(ctx, tableInfo)
+	// Get updated target max timestamp (should now include the data we just synced)
+	targetMaxTS, err := s.getMaxTimestampFromTarget(ctx, tableName)
+	if err != nil {
+		return fmt.Errorf("failed to get target max timestamp: %w", err)
+	}
+
+	// Only handle deletions if target is caught up with source
+	if !targetMaxTS.IsZero() && !sourceMaxTS.IsZero() && (targetMaxTS.Equal(sourceMaxTS) || targetMaxTS.After(sourceMaxTS)) {
+		if s.cfg.Verbose {
+			log.Printf("%s: sync completed", tableName)
+			log.Printf("%s: checking for deletions", tableName)
+		}
+		if err := s.handleDeletedRows(ctx, tableInfo); err != nil {
+			return fmt.Errorf("failed to handle deleted rows: %w", err)
+		}
+	} else if s.cfg.Verbose {
+		log.Printf("%s: sync completed, but target not fully caught up (target: %s, source: %s) - skipping deletion check", tableName, targetMaxTS.Format(time.RFC3339), sourceMaxTS.Format(time.RFC3339))
+	}
+
+	return nil
 }
 
 // handleDeletedRows identifies and removes deleted rows from target
@@ -364,8 +421,8 @@ func (s *Syncer) handleDeletedRows(ctx context.Context, tableInfo *table.Info) e
 
 	sourcePKs := make(map[string]bool)
 	for sourceRows.Next() {
-		values := make([]interface{}, len(tableInfo.PrimaryKey))
-		scanArgs := make([]interface{}, len(tableInfo.PrimaryKey))
+		values := make([]any, len(tableInfo.PrimaryKey))
+		scanArgs := make([]any, len(tableInfo.PrimaryKey))
 		for i := range values {
 			scanArgs[i] = &values[i]
 		}
@@ -387,10 +444,10 @@ func (s *Syncer) handleDeletedRows(ctx context.Context, tableInfo *table.Info) e
 	}
 	defer targetRows.Close()
 
-	var toDelete [][]interface{}
+	var toDelete [][]any
 	for targetRows.Next() {
-		values := make([]interface{}, len(tableInfo.PrimaryKey))
-		scanArgs := make([]interface{}, len(tableInfo.PrimaryKey))
+		values := make([]any, len(tableInfo.PrimaryKey))
+		scanArgs := make([]any, len(tableInfo.PrimaryKey))
 		for i := range values {
 			scanArgs[i] = &values[i]
 		}
@@ -422,7 +479,7 @@ func (s *Syncer) handleDeletedRows(ctx context.Context, tableInfo *table.Info) e
 }
 
 // createPKString creates a string representation of primary key values
-func (s *Syncer) createPKString(values []interface{}) string {
+func (s *Syncer) createPKString(values []any) string {
 	parts := make([]string, len(values))
 	for i, v := range values {
 		parts[i] = fmt.Sprintf("%v", v)
@@ -431,7 +488,7 @@ func (s *Syncer) createPKString(values []interface{}) string {
 }
 
 // deleteRows deletes specified rows from target table
-func (s *Syncer) deleteRows(ctx context.Context, tableInfo *table.Info, rows [][]interface{}) error {
+func (s *Syncer) deleteRows(ctx context.Context, tableInfo *table.Info, rows [][]any) error {
 	if len(rows) == 0 {
 		return nil
 	}
@@ -582,7 +639,7 @@ func (s *Syncer) getActualBatchEndTimestamp(ctx context.Context, tableInfo *tabl
 }
 
 // getSourceData retrieves data from source table within timestamp range
-func (s *Syncer) getSourceData(ctx context.Context, tableInfo *table.Info, fromTS, toTS time.Time) ([][]interface{}, error) {
+func (s *Syncer) getSourceData(ctx context.Context, tableInfo *table.Info, fromTS, toTS time.Time) ([][]any, error) {
 	columns := s.quotedColumnsList(tableInfo.Columns)
 	query := fmt.Sprintf(`
 		SELECT %s 
@@ -599,10 +656,10 @@ func (s *Syncer) getSourceData(ctx context.Context, tableInfo *table.Info, fromT
 	}
 	defer rows.Close()
 
-	var result [][]interface{}
+	var result [][]any
 	for rows.Next() {
-		values := make([]interface{}, len(tableInfo.Columns))
-		scanArgs := make([]interface{}, len(tableInfo.Columns))
+		values := make([]any, len(tableInfo.Columns))
+		scanArgs := make([]any, len(tableInfo.Columns))
 		for i := range values {
 			scanArgs[i] = &values[i]
 		}
@@ -618,7 +675,7 @@ func (s *Syncer) getSourceData(ctx context.Context, tableInfo *table.Info, fromT
 }
 
 // upsertData performs upsert operation on target table
-func (s *Syncer) upsertData(ctx context.Context, tableInfo *table.Info, rows [][]interface{}) error {
+func (s *Syncer) upsertData(ctx context.Context, tableInfo *table.Info, rows [][]any) error {
 	if len(rows) == 0 {
 		return nil
 	}

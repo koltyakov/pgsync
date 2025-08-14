@@ -1,13 +1,13 @@
 {
   "_comment": "Example configuration file for pgsync",
-  "source_db": "postgres://user:password@source-host:5432/source_database",
-  "target_db": "postgres://user:password@target-host:5432/target_database",
+  "sourceDb": "postgres://user:password@source-host:5432/source_database",
+  "targetDb": "postgres://user:password@target-host:5432/target_database",
   "schema": "public",
-  "timestamp_column": "updated_at",
+  "timestampColumn": "updated_at",
   "parallel": 4,
-  "batch_size": 1000,
-  "include_tables": [],
-  "exclude_tables": ["audit_logs", "temp_tables"],
+  "batchSize": 1000,
+  "includeTables": [],
+  "excludeTables": ["audit_logs", "temp_tables"],
   "verbose": false,
-  "state_db": "./pgsync.db"
+  "stateDb": "./pgsync.db"
 }

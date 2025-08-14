@@ -59,14 +59,14 @@ Create a `config.json` file:
 
 ```json
 {
-  "source_db": "postgres://user:pass@source:5432/sourcedb",
-  "target_db": "postgres://user:pass@target:5432/targetdb",
+  "sourceDb": "postgres://user:pass@source:5432/sourcedb",
+  "targetDb": "postgres://user:pass@target:5432/targetdb",
   "schema": "public",
-  "timestamp_column": "updated_at",
+  "timestampColumn": "updated_at",
   "parallel": 4,
-  "batch_size": 1000,
-  "include_tables": ["users", "orders"],
-  "exclude_tables": ["logs"],
+  "batchSize": 1000,
+  "includeTables": ["users", "orders"],
+  "excludeTables": ["logs"],
   "verbose": true
 }
 ```
