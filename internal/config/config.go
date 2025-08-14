@@ -16,6 +16,7 @@ type Config struct {
 	Parallel      int      `json:"parallel"`
 	BatchSize     int      `json:"batchSize"`
 	Verbose       bool     `json:"verbose"`
+	Integrity     bool     `json:"integrity"`
 }
 
 // LoadFromFile loads configuration from a JSON file

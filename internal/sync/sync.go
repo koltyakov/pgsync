@@ -202,11 +202,13 @@ func (s *Syncer) Sync() error {
 		log.Printf("WARNING Tables skipped (%d): %s", len(skipped), strings.Join(skipped, ", "))
 	}
 
-	// Post-sync integrity check and CSV export
-	if err := s.writeIntegrityCSV(ctx, tableInfos); err != nil {
-		log.Printf("WARNING failed to write integrity.csv: %v", err)
-	} else {
-		log.Printf("Integrity report written to integrity.csv")
+	// Post-sync integrity check and CSV export (optional)
+	if s.cfg.Integrity {
+		if err := s.writeIntegrityCSV(ctx, tableInfos); err != nil {
+			log.Printf("WARNING failed to write integrity.csv: %v", err)
+		} else {
+			log.Printf("Integrity report written to integrity.csv")
+		}
 	}
 	return nil
 }

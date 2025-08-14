@@ -25,6 +25,7 @@ func main() {
 		parallel   = flag.Int("parallel", 4, "Number of parallel sync sessions")
 		batchSize  = flag.Int("batch-size", 1000, "Batch size for data processing")
 		verbose    = flag.Bool("verbose", false, "Enable verbose logging")
+		integrity  = flag.Bool("integrity", false, "Run post-sync integrity checks and write integrity.csv")
 		configFile = flag.String("config", "", "Path to configuration file")
 	)
 
@@ -38,6 +39,7 @@ func main() {
 		Parallel:     *parallel,
 		BatchSize:    *batchSize,
 		Verbose:      *verbose,
+		Integrity:    *integrity,
 	}
 
 	if *include != "" {
