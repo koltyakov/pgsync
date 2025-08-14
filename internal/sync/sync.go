@@ -125,6 +125,7 @@ func (s *Syncer) Close() error {
 // Sync performs the synchronization process
 func (s *Syncer) Sync() error {
 	ctx := context.Background()
+	start := time.Now()
 
 	// Get list of tables to sync
 	tables, err := s.getTablesList(ctx)
@@ -185,12 +186,13 @@ func (s *Syncer) Sync() error {
 	totalDeletes := s.totalDeletes
 	s.mu.Unlock()
 
-	log.Printf("All table syncs completed. Totals: synced %d rows, deleted %d rows", totalUpserts, totalDeletes)
+	elapsed := time.Since(start)
+	log.Printf("All table syncs completed in %s. Totals: synced %d rows, deleted %d rows", elapsed, totalUpserts, totalDeletes)
 	return nil
 }
 
 // worker processes table sync jobs
-func (s *Syncer) worker(ctx context.Context, workerID int, workChan <-chan *table.Info) {
+func (s *Syncer) worker(ctx context.Context, _ int /* worker id*/, workChan <-chan *table.Info) {
 	for tableInfo := range workChan {
 		if err := s.syncTable(ctx, tableInfo); err != nil {
 			log.Printf("%s: error syncing - %v", tableInfo.Name, err)
