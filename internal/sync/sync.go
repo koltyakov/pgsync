@@ -509,6 +509,25 @@ func (s *Syncer) syncTableIncremental(ctx context.Context, tableInfo *table.Info
 			return fmt.Errorf("failed to get target max timestamp: %w", err)
 		}
 
+		// Special case: if source is empty and target has rows, delete all in target in chunks
+		sourceHas, err := s.tableHasRows(ctx, s.sourceDB, tableName)
+		if err != nil {
+			return fmt.Errorf("failed to check source rows: %w", err)
+		}
+		targetHas, err := s.tableHasRows(ctx, s.targetDB, tableName)
+		if err != nil {
+			return fmt.Errorf("failed to check target rows: %w", err)
+		}
+		if !sourceHas && targetHas {
+			if s.cfg.Verbose {
+				log.Printf("%s: source is empty, deleting all rows from target (chunked)", tableName)
+			}
+			if err := s.deleteAllInChunks(ctx, tableInfo); err != nil {
+				return fmt.Errorf("failed to delete all target rows: %w", err)
+			}
+			return nil
+		}
+
 		// Only handle deletions if target is caught up with source
 		if !targetMaxTS.IsZero() && !sourceMaxTS.IsZero() && (targetMaxTS.Equal(sourceMaxTS) || targetMaxTS.After(sourceMaxTS)) {
 			if s.cfg.Verbose {
@@ -626,6 +645,17 @@ func (s *Syncer) handleDeletedRows(ctx context.Context, tableInfo *table.Info) e
 		pkStr := s.createPKString(values)
 		if !sourcePKs[pkStr] {
 			toDelete = append(toDelete, values)
+			// Chunked deletion using batch size to avoid large statements
+			if s.cfg.BatchSize > 0 && len(toDelete) >= s.cfg.BatchSize {
+				if s.cfg.Verbose {
+					log.Printf("%s: deleting %d rows (chunk)", tableInfo.Name, len(toDelete))
+				}
+				if err := s.deleteRows(ctx, tableInfo, toDelete); err != nil {
+					return fmt.Errorf("failed to delete rows chunk: %w", err)
+				}
+				s.addDeletes(tableInfo.Name, len(toDelete))
+				toDelete = toDelete[:0]
+			}
 		}
 	}
 
@@ -643,6 +673,77 @@ func (s *Syncer) handleDeletedRows(ctx context.Context, tableInfo *table.Info) e
 	}
 
 	return nil
+}
+
+// deleteAllInChunks deletes all rows from target table in chunks (by PK if available)
+func (s *Syncer) deleteAllInChunks(ctx context.Context, tableInfo *table.Info) error {
+	if len(tableInfo.PrimaryKey) == 0 {
+		// Fall back to a single DELETE FROM table
+		query := fmt.Sprintf("DELETE FROM %s", s.quotedTableName(tableInfo.Name))
+		res, err := s.targetDB.ExecContext(ctx, query)
+		if err != nil {
+			return err
+		}
+		if n, err := res.RowsAffected(); err == nil {
+			s.addDeletes(tableInfo.Name, int(n))
+		}
+		return nil
+	}
+
+	pkCols := s.quotedColumnsList(tableInfo.PrimaryKey)
+	batch := s.cfg.BatchSize
+	if batch <= 0 {
+		batch = 1000
+	}
+
+	for {
+		selectQuery := fmt.Sprintf("SELECT %s FROM %s LIMIT %d", pkCols, s.quotedTableName(tableInfo.Name), batch)
+		rows, err := s.targetDB.QueryContext(ctx, selectQuery)
+		if err != nil {
+			return err
+		}
+		var pkRows [][]any
+		for rows.Next() {
+			values := make([]any, len(tableInfo.PrimaryKey))
+			scanArgs := make([]any, len(tableInfo.PrimaryKey))
+			for i := range values {
+				scanArgs[i] = &values[i]
+			}
+			if err := rows.Scan(scanArgs...); err != nil {
+				_ = rows.Close()
+				return err
+			}
+			pkRows = append(pkRows, values)
+		}
+		_ = rows.Close()
+
+		if len(pkRows) == 0 {
+			break
+		}
+
+		if s.cfg.Verbose {
+			log.Printf("%s: deleting %d rows", tableInfo.Name, len(pkRows))
+		}
+		if err := s.deleteRows(ctx, tableInfo, pkRows); err != nil {
+			return err
+		}
+		s.addDeletes(tableInfo.Name, len(pkRows))
+
+		if len(pkRows) < batch {
+			break
+		}
+	}
+	return nil
+}
+
+// tableHasRows checks if a table has at least one row
+func (s *Syncer) tableHasRows(ctx context.Context, dbh *sql.DB, tableName string) (bool, error) {
+	query := fmt.Sprintf("SELECT EXISTS (SELECT 1 FROM %s LIMIT 1)", s.quotedTableName(tableName))
+	var exists bool
+	if err := dbh.QueryRowContext(ctx, query).Scan(&exists); err != nil {
+		return false, err
+	}
+	return exists, nil
 }
 
 // createPKString creates a string representation of primary key values
