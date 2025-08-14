@@ -36,7 +36,9 @@ func (i *Inspector) GetTables(ctx context.Context) ([]string, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to query tables: %w", err)
 	}
-	defer rows.Close()
+	defer func() {
+		_ = rows.Close() // Ignore error in deferred close
+	}()
 
 	var tables []string
 	for rows.Next() {
@@ -93,7 +95,9 @@ func (i *Inspector) getColumns(ctx context.Context, tableName string) ([]string,
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() {
+		_ = rows.Close() // Ignore error in deferred close
+	}()
 
 	var columns []string
 	for rows.Next() {
@@ -122,7 +126,9 @@ func (i *Inspector) getPrimaryKey(ctx context.Context, tableName string) ([]stri
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() {
+		_ = rows.Close() // Ignore error in deferred close
+	}()
 
 	var primaryKey []string
 	for rows.Next() {

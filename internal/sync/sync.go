@@ -54,20 +54,20 @@ func New(cfg *config.Config) (*Syncer, error) {
 
 	targetDB, err := sql.Open("postgres", cfg.TargetDB)
 	if err != nil {
-		sourceDB.Close()
+		_ = sourceDB.Close() // Ignore close error when handling connection error
 		return nil, fmt.Errorf("failed to connect to target database: %w", err)
 	}
 
 	// Test connections
 	if err := sourceDB.Ping(); err != nil {
-		sourceDB.Close()
-		targetDB.Close()
+		_ = sourceDB.Close() // Ignore close error when handling ping error
+		_ = targetDB.Close() // Ignore close error when handling ping error
 		return nil, fmt.Errorf("failed to ping source database: %w", err)
 	}
 
 	if err := targetDB.Ping(); err != nil {
-		sourceDB.Close()
-		targetDB.Close()
+		_ = sourceDB.Close() // Ignore close error when handling ping error
+		_ = targetDB.Close() // Ignore close error when handling ping error
 		return nil, fmt.Errorf("failed to ping target database: %w", err)
 	}
 
@@ -398,7 +398,7 @@ func (s *Syncer) handleDeletedRows(ctx context.Context, tableInfo *table.Info) e
 	if err != nil {
 		return fmt.Errorf("failed to query source primary keys: %w", err)
 	}
-	defer sourceRows.Close()
+	defer func() { _ = sourceRows.Close() }()
 
 	sourcePKs := make(map[string]bool)
 	for sourceRows.Next() {
@@ -423,7 +423,7 @@ func (s *Syncer) handleDeletedRows(ctx context.Context, tableInfo *table.Info) e
 	if err != nil {
 		return fmt.Errorf("failed to query target primary keys: %w", err)
 	}
-	defer targetRows.Close()
+	defer func() { _ = targetRows.Close() }()
 
 	var toDelete [][]any
 	for targetRows.Next() {
@@ -480,7 +480,7 @@ func (s *Syncer) deleteRows(ctx context.Context, tableInfo *table.Info, rows [][
 	if err != nil {
 		return fmt.Errorf("failed to prepare delete statement: %w", err)
 	}
-	defer stmt.Close()
+	defer func() { _ = stmt.Close() }()
 
 	for _, row := range rows {
 		if _, err := stmt.ExecContext(ctx, row...); err != nil {
@@ -573,7 +573,7 @@ func (s *Syncer) calculateBatchEndTimestamp(ctx context.Context, tableInfo *tabl
 	if err != nil {
 		return maxTS // Fallback to max timestamp
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var lastTS time.Time
 	count := 0
@@ -631,7 +631,7 @@ func (s *Syncer) getSourceData(ctx context.Context, tableInfo *table.Info, fromT
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var result [][]any
 	for rows.Next() {
@@ -662,7 +662,7 @@ func (s *Syncer) upsertData(ctx context.Context, tableInfo *table.Info, rows [][
 	if err != nil {
 		return fmt.Errorf("failed to prepare upsert statement: %w", err)
 	}
-	defer stmt.Close()
+	defer func() { _ = stmt.Close() }()
 
 	for _, row := range rows {
 		if _, err := stmt.ExecContext(ctx, row...); err != nil {
@@ -710,12 +710,4 @@ func (s *Syncer) buildUpsertQuery(tableInfo *table.Info) string {
 		s.quotedTableName(tableInfo.Name), columns, placeholderStr, conflictCols, updateClause)
 
 	return query
-}
-
-// compareAndSyncFullTable performs full table comparison for tables without timestamp
-func (s *Syncer) compareAndSyncFullTable(ctx context.Context, tableInfo *table.Info) error {
-	// This is a simplified implementation
-	// In practice, you might want to use checksums or row-by-row comparison
-	log.Printf("Full table sync for %s is not yet implemented", tableInfo.Name)
-	return nil
 }

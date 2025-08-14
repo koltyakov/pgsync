@@ -65,7 +65,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to create syncer: %v", err)
 	}
-	defer syncer.Close()
+	defer func() { _ = syncer.Close() }()
 
 	if err := syncer.Sync(); err != nil {
 		log.Fatalf("Sync failed: %v", err)
