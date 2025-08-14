@@ -373,9 +373,6 @@ func (s *Syncer) syncTableIncremental(ctx context.Context, tableInfo *table.Info
 			return fmt.Errorf("failed to process batch: %w", err)
 		}
 
-		// Log processing progress
-		log.Printf("[%s] %s - Processed batch, current timestamp: %s", time.Now().Format(time.RFC3339), tableName, nextTS.Format(time.RFC3339))
-
 		currentTS = nextTS.Add(time.Microsecond) // Move slightly forward to avoid duplicate processing
 	}
 
