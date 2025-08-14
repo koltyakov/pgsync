@@ -3,8 +3,10 @@ package sync
 import (
 	"context"
 	"database/sql"
+	"encoding/csv"
 	"fmt"
 	"log"
+	"os"
 	"path/filepath"
 	"reflect"
 	"sort"
@@ -198,6 +200,13 @@ func (s *Syncer) Sync() error {
 	s.mu.Unlock()
 	if len(skipped) > 0 {
 		log.Printf("WARNING Tables skipped (%d): %s", len(skipped), strings.Join(skipped, ", "))
+	}
+
+	// Post-sync integrity check and CSV export
+	if err := s.writeIntegrityCSV(ctx, tableInfos); err != nil {
+		log.Printf("WARNING failed to write integrity.csv: %v", err)
+	} else {
+		log.Printf("Integrity report written to integrity.csv")
 	}
 	return nil
 }
@@ -1087,4 +1096,122 @@ func (s *Syncer) addSkipped(table string) {
 	s.mu.Lock()
 	s.skippedTables = append(s.skippedTables, table)
 	s.mu.Unlock()
+}
+
+// writeIntegrityCSV writes integrity stats for each table into integrity.csv
+func (s *Syncer) writeIntegrityCSV(ctx context.Context, tables []*table.Info) error {
+	// Create file in current working directory
+	f, err := os.Create("integrity.csv")
+	if err != nil {
+		return err
+	}
+	defer func() { _ = f.Close() }()
+
+	w := csv.NewWriter(f)
+	defer w.Flush()
+
+	// Header
+	header := []string{
+		"Table Name",
+		"Source Rows", "Target Rows",
+		"Source min(id)", "Target min(id)",
+		"Source max(id)", "Target max(id)",
+		"Source min(ts)", "Target min(ts)",
+		"Source max(ts)", "Target max(ts)",
+	}
+	if err := w.Write(header); err != nil {
+		return err
+	}
+
+	for _, info := range tables {
+		// Row counts
+		srcRows, err := s.getExactRowCount(ctx, s.sourceDB, info.Name)
+		if err != nil {
+			return fmt.Errorf("%s: failed to get source row count: %w", info.Name, err)
+		}
+		tgtRows, err := s.getExactRowCount(ctx, s.targetDB, info.Name)
+		if err != nil {
+			return fmt.Errorf("%s: failed to get target row count: %w", info.Name, err)
+		}
+
+		// ID column min/max (best-effort: single-column PK or column named 'id')
+		var srcMinID, srcMaxID, tgtMinID, tgtMaxID string
+		if idCol, ok := s.findIDColumn(info); ok {
+			if srcMinID, srcMaxID, err = s.getMinMaxAsText(ctx, s.sourceDB, info.Name, idCol); err != nil {
+				return fmt.Errorf("%s: failed to get source id min/max: %w", info.Name, err)
+			}
+			if tgtMinID, tgtMaxID, err = s.getMinMaxAsText(ctx, s.targetDB, info.Name, idCol); err != nil {
+				return fmt.Errorf("%s: failed to get target id min/max: %w", info.Name, err)
+			}
+		} else {
+			// leave as empty strings if no suitable id column
+		}
+
+		// Timestamp min/max if column exists
+		var srcMinTS, srcMaxTS, tgtMinTS, tgtMaxTS string
+		if info.HasColumn(s.cfg.TimestampCol) && s.cfg.TimestampCol != "" {
+			if srcMinTS, srcMaxTS, err = s.getMinMaxAsText(ctx, s.sourceDB, info.Name, s.cfg.TimestampCol); err != nil {
+				return fmt.Errorf("%s: failed to get source ts min/max: %w", info.Name, err)
+			}
+			if tgtMinTS, tgtMaxTS, err = s.getMinMaxAsText(ctx, s.targetDB, info.Name, s.cfg.TimestampCol); err != nil {
+				return fmt.Errorf("%s: failed to get target ts min/max: %w", info.Name, err)
+			}
+		}
+
+		rec := []string{
+			info.Name,
+			fmt.Sprintf("%d", srcRows), fmt.Sprintf("%d", tgtRows),
+			srcMinID, tgtMinID,
+			srcMaxID, tgtMaxID,
+			srcMinTS, tgtMinTS,
+			srcMaxTS, tgtMaxTS,
+		}
+		if err := w.Write(rec); err != nil {
+			return err
+		}
+	}
+
+	w.Flush()
+	return w.Error()
+}
+
+// getExactRowCount returns exact COUNT(*) from the given DB for a table
+func (s *Syncer) getExactRowCount(ctx context.Context, dbh *sql.DB, tableName string) (int64, error) {
+	query := fmt.Sprintf("SELECT COUNT(*) FROM %s", s.quotedTableName(tableName))
+	var cnt int64
+	if err := dbh.QueryRowContext(ctx, query).Scan(&cnt); err != nil {
+		return 0, err
+	}
+	return cnt, nil
+}
+
+// getMinMaxAsText returns MIN and MAX for a column, cast to text for CSV friendliness
+func (s *Syncer) getMinMaxAsText(ctx context.Context, dbh *sql.DB, tableName, column string) (string, string, error) {
+	// Cast the column to text BEFORE applying MIN/MAX to support types without direct aggregates (e.g., uuid)
+	query := fmt.Sprintf("SELECT MIN((%s)::text), MAX((%s)::text) FROM %s", s.quotedColumnName(column), s.quotedColumnName(column), s.quotedTableName(tableName))
+	var minVal, maxVal sql.NullString
+	if err := dbh.QueryRowContext(ctx, query).Scan(&minVal, &maxVal); err != nil {
+		return "", "", err
+	}
+	var minStr, maxStr string
+	if minVal.Valid {
+		minStr = minVal.String
+	}
+	if maxVal.Valid {
+		maxStr = maxVal.String
+	}
+	return minStr, maxStr, nil
+}
+
+// findIDColumn determines the best ID column to use for min/max: prefers single-column PK, falls back to a column named 'id'
+func (s *Syncer) findIDColumn(info *table.Info) (string, bool) {
+	if len(info.PrimaryKey) == 1 {
+		return info.PrimaryKey[0], true
+	}
+	for _, c := range info.Columns {
+		if strings.EqualFold(c, "id") {
+			return c, true
+		}
+	}
+	return "", false
 }

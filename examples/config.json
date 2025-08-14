@@ -1,0 +1,20 @@
+{
+  "sourceDb": "postgres://user:password@prod-microservice-db:5432/microservice",
+  "targetDb": "postgres://user:password@staging-microservice-db:5432/microservice",
+  "schema": "public",
+  "timestampColumn": "updated_at",
+  "parallel": 6,
+  "batchSize": 1000,
+  "includeTables": [
+    "users",
+    "user_profiles",
+    "user_preferences",
+    "user_sessions",
+    "organizations",
+    "organization_members",
+    "subscriptions",
+    "billing_info"
+  ],
+  "excludeTables": [],
+  "verbose": true
+}
