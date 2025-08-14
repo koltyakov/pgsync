@@ -188,8 +188,52 @@ func (s *Syncer) Sync() error {
 	s.mu.Unlock()
 
 	elapsed := time.Since(start)
-	log.Printf("All table syncs completed in %s. Totals: synced %d rows, deleted %d rows", elapsed, totalUpserts, totalDeletes)
+	log.Printf("All table syncs completed in %s. Totals: synced %d rows, deleted %d rows", formatHumanDuration(elapsed), totalUpserts, totalDeletes)
 	return nil
+}
+
+// formatHumanDuration renders duration as [Hh][Mm][Ss][ms], with milliseconds precision (e.g., 2m21s883ms)
+func formatHumanDuration(d time.Duration) string {
+	if d < 0 {
+		d = -d
+	}
+	msTotal := d.Milliseconds()
+	if msTotal == 0 {
+		return "0ms"
+	}
+	const (
+		msPerSecond = int64(1000)
+		msPerMinute = msPerSecond * 60
+		msPerHour   = msPerMinute * 60
+	)
+	h := msTotal / msPerHour
+	msTotal %= msPerHour
+	m := msTotal / msPerMinute
+	msTotal %= msPerMinute
+	s := msTotal / msPerSecond
+	ms := msTotal % msPerSecond
+
+	parts := make([]string, 0, 4)
+	if h > 0 {
+		parts = append(parts, fmt.Sprintf("%dh", h))
+	}
+	if m > 0 {
+		parts = append(parts, fmt.Sprintf("%dm", m))
+	}
+	if h > 0 || m > 0 || s > 0 {
+		if h > 0 || m > 0 {
+			parts = append(parts, fmt.Sprintf("%ds", s))
+		} else if s > 0 {
+			parts = append(parts, fmt.Sprintf("%ds", s))
+		}
+	}
+	if ms > 0 {
+		parts = append(parts, fmt.Sprintf("%dms", ms))
+	}
+	if len(parts) == 0 {
+		return "0ms"
+	}
+	return strings.Join(parts, "")
 }
 
 // worker processes table sync jobs
