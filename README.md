@@ -1,13 +1,14 @@
-## pgsync — PostgreSQL data sync utility
+# pgsync — PostgreSQL data sync utility
 
 Lightweight, reliable data synchronization for PostgreSQL. pgsync focuses on data-only sync between two Postgres databases using timestamp-based incremental updates, safe upserts, and optional table filtering.
 
-Why this tool
+## Why this tool
+
 - Simple: data-only sync, no schema changes.
 - Predictable: incremental sync based on timestamps.
 - Fast: batch processing and configurable parallelism.
 
-Quick start
+## Quick start
 
 ```bash
 git clone https://github.com/koltyakov/pgsync.git
@@ -16,7 +17,7 @@ go build -o pgsync
 ./pgsync -source "postgres://user:pass@source:5432/db" -target "postgres://user:pass@target:5432/db"
 ```
 
-Config (JSON)
+## Config (JSON)
 
 Create `config.json` to store flags you use often:
 
@@ -34,7 +35,7 @@ Create `config.json` to store flags you use often:
 }
 ```
 
-Command-line examples
+## Command-line examples
 
 - Sync everything in `public`:
 
@@ -54,7 +55,7 @@ Command-line examples
 ./pgsync -source "..." -target "..." -exclude "temp_*,*_log"
 ```
 
-Flags (short reference)
+## Flags (short reference)
 
 | Flag | Description | Default |
 |------|-------------|---------|
@@ -69,7 +70,7 @@ Flags (short reference)
 | `-verbose` | Verbose logging | `false` |
 | `-config` | Path to JSON config file | none |
 
-Wildcard patterns
+### Wildcard patterns
 
 Supports standard shell-style patterns (matched with Go `filepath.Match`):
 
@@ -79,23 +80,23 @@ Supports standard shell-style patterns (matched with Go `filepath.Match`):
 
 Examples: `user_*`, `*_log`, `temp_???`, `audit_[0-9]*`.
 
-Notes and constraints
+### Notes and constraints
 
 - pgsync is data-only: it will not create or alter target schemas. Ensure target tables and primary keys exist beforehand.
 - Requires proper indexes on timestamp and primary key columns for best performance.
 - Use `-parallel` and `-batch-size` to tune throughput vs load on source/target.
 
-How it works (brief)
+## How it works (brief)
 
 - Discovers tables in the schema and applies include/exclude filters.
 - Uses the target's maximum timestamp (or zero if empty) to pick the starting point.
 - Processes rows in timestamp-ordered batches and performs `INSERT ... ON CONFLICT DO UPDATE` upserts.
 - Optionally detects and deletes rows present in target but not in source when the target is caught up.
 
-Contributing
+## Contributing
 
 - Fork, branch, add tests, submit a pull request.
 
-License
+## License
 
-MIT — see `LICENSE`.
+MIT — see [LICENSE](./LICENSE).
