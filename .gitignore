@@ -1,0 +1,7 @@
+bin/
+pgsync
+pgsync.exe
+./config.json
+.env
+.DS_Store
+tmp/
