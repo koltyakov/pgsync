@@ -203,9 +203,42 @@ export function SchemaTree({
     const checkedKeysArray = Array.isArray(checked) ? checked : checked.checked;
     const checkedSet = new Set(checkedKeysArray.map(k => String(k)));
     
-    const newSelection: TableSelection = {};
-    
+    // Find which table(s) changed by comparing with current selection
+    const changedTables: string[] = [];
     for (const tableName of tables) {
+      const tableInfo = tableInfoMap.get(tableName);
+      const columns = tableInfo?.columns || [];
+      const prevSelection = selection[tableName];
+      
+      // Check if table selection state changed
+      const wasTableSelected = prevSelection?.selected ?? false;
+      const tableKeyChecked = checkedSet.has(tableName);
+      
+      // Check if any column selection changed
+      const prevColumns = prevSelection?.columns ?? new Set<string>();
+      let columnsChanged = false;
+      for (const col of columns) {
+        const colKey = `${tableName}.${col.name}`;
+        const wasChecked = prevColumns.has(col.name);
+        const isChecked = checkedSet.has(colKey);
+        if (wasChecked !== isChecked) {
+          columnsChanged = true;
+          break;
+        }
+      }
+      
+      if (wasTableSelected !== tableKeyChecked || columnsChanged) {
+        changedTables.push(tableName);
+      }
+    }
+    
+    // If nothing changed, skip update
+    if (changedTables.length === 0) return;
+    
+    // Only rebuild selection for changed tables
+    const newSelection: TableSelection = { ...selection };
+    
+    for (const tableName of changedTables) {
       const tableInfo = tableInfoMap.get(tableName);
       const columns = tableInfo?.columns || [];
       const primaryKeys = tableInfo?.primaryKey || [];
@@ -274,7 +307,6 @@ export function SchemaTree({
   }, [tables, tableInfoMap, selection, onSelectionChange]);
 
   // Initialize selection when table info is loaded
-  // Note: onSelectionChange is expected to be a stable reference (e.g., setState from useState)
   useEffect(() => {
     if (tables.length === 0 || tableInfoMap.size === 0) return;
     
@@ -297,7 +329,8 @@ export function SchemaTree({
       }
     }
     onSelectionChange(initialSelection);
-  }, [tables, tableInfoMap, selection, onSelectionChange]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- onSelectionChange should be stable (setState from useState)
+  }, [tables, tableInfoMap, selection]);
 
   if (loading) {
     return (

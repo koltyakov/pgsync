@@ -47,9 +47,12 @@ func (t *Info) FullName() string {
 // Primary key columns are always included even if not in the filter.
 // Uses case-insensitive matching because PostgreSQL normalizes unquoted
 // identifiers to lowercase, so user input may differ in case from stored names.
+//
+// Note: When includeColumns is empty, returns the original Info pointer for efficiency.
+// Callers should not modify the returned Info if they need to preserve the original.
 func (t *Info) FilterColumns(includeColumns []string) *Info {
 	if len(includeColumns) == 0 {
-		return t // No filter, return original
+		return t // No filter, return original for efficiency
 	}
 
 	// Build a set of columns to include (always include PKs)

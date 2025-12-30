@@ -21,11 +21,13 @@ type Server struct {
 	targetDB string
 	schema   string
 
-	mu        sync.Mutex
-	syncState *SyncState
-	clients   map[*websocket.Conn]bool
-	upgrader  websocket.Upgrader
-	logger    *slog.Logger
+	mu         sync.Mutex
+	syncState  *SyncState
+	syncCancel context.CancelFunc // Cancel function for running sync
+	serverCtx  context.Context    // Server lifecycle context
+	clients    map[*websocket.Conn]bool
+	upgrader   websocket.Upgrader
+	logger     *slog.Logger
 }
 
 // SyncState tracks current sync operation state
@@ -99,6 +101,7 @@ func New(cfg *Config) *Server {
 
 // Start runs the HTTP server
 func (s *Server) Start(ctx context.Context) error {
+	s.serverCtx = ctx
 	mux := http.NewServeMux()
 
 	// API routes
@@ -204,15 +207,24 @@ type ConfigResponse struct {
 // - Query param at start: ?password=secret&
 // - Query param at end: &password=secret
 // - Key=value format: password=secret (space or end of string)
+// - Colon-separated format: password:secret
 func maskPassword(connStr string) string {
-	// Match URI format: :password@
-	re := regexp.MustCompile(`(:)([^:@]+)(@)`)
+	// Match URI format where password appears between ':' and '@'
+	// Allow ':' inside the password and stop only at '@'.
+	re := regexp.MustCompile(`(:)([^@]+)(@)`)
 	masked := re.ReplaceAllString(connStr, "$1***$3")
 
-	// Match password in query params or key=value format
-	// Handles: ?password=xxx, &password=xxx, password=xxx (at end or followed by space/&)
-	re2 := regexp.MustCompile(`([?&]?password=)([^&\s]*)`)
-	masked = re2.ReplaceAllString(masked, "$1***")
+	// Match password in query params: ?password=xxx or &password=xxx (case-insensitive)
+	reQuery := regexp.MustCompile(`(?i)([?&]password=)([^&\s]*)`)
+	masked = reQuery.ReplaceAllString(masked, "$1***")
+
+	// Match standalone key=value format: password=xxx (at start or with surrounding text, case-insensitive)
+	reKeyValue := regexp.MustCompile(`(?i)(\bpassword\s*=\s*)(\S*)`)
+	masked = reKeyValue.ReplaceAllString(masked, "$1***")
+
+	// Match colon-separated format: password:xxx (case-insensitive)
+	reColon := regexp.MustCompile(`(?i)(\bpassword\s*:\s*)(\S*)`)
+	masked = reColon.ReplaceAllString(masked, "$1***")
 
 	return masked
 }

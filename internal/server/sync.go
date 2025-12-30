@@ -65,8 +65,9 @@ func (s *Server) handleStartSync(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Start sync in background
-	go s.runSync(req)
+	// Start sync in background with server context for graceful shutdown
+	// Note: We use serverCtx, not r.Context(), because the sync outlives the HTTP request
+	go s.runSync(s.serverCtx, req)
 
 	s.writeJSON(w, map[string]string{
 		"status":  "started",
@@ -98,7 +99,7 @@ func (s *Server) handleSyncStatus(w http.ResponseWriter, r *http.Request) {
 }
 
 // runSync executes the sync operation with progress reporting
-func (s *Server) runSync(req SyncRequest) {
+func (s *Server) runSync(parentCtx context.Context, req SyncRequest) {
 	// Set initial state
 	s.mu.Lock()
 	s.syncState = &SyncState{
@@ -152,9 +153,22 @@ func (s *Server) runSync(req SyncRequest) {
 	}
 	defer func() { _ = syncer.Close() }()
 
-	// Run sync
-	ctx := context.Background()
+	// Run sync with a context that cancels on server shutdown
+	ctx, cancel := context.WithCancel(parentCtx)
+	s.mu.Lock()
+	s.syncCancel = cancel
+	s.mu.Unlock()
+	defer func() {
+		s.mu.Lock()
+		s.syncCancel = nil
+		s.mu.Unlock()
+	}()
+
 	if err := syncer.Sync(ctx); err != nil {
+		// Don't report context cancellation as an error if server is shutting down
+		if ctx.Err() != nil && parentCtx.Err() != nil {
+			return
+		}
 		s.syncError(err)
 		return
 	}
@@ -216,7 +230,10 @@ func (h *webProgressHandler) OnStart(tables []string) {
 
 func (h *webProgressHandler) OnTableStart(table string, index int) {
 	h.tableIndex = index
-	progress := float64(index) / float64(h.totalTables) * 100
+	var progress float64
+	if h.totalTables > 0 {
+		progress = float64(index) / float64(h.totalTables) * 100
+	}
 
 	h.server.mu.Lock()
 	h.server.syncState.CurrentStep = fmt.Sprintf("Syncing %s", table)

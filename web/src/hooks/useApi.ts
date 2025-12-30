@@ -12,10 +12,11 @@ export function useApi() {
   const [loadingStats, setLoadingStats] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
+  const initializedRef = useRef(false);
 
-  const fetchConfig = useCallback(async () => {
+  const fetchConfig = useCallback(async (signal?: AbortSignal) => {
     try {
-      const response = await fetch(`${API_BASE}/api/config`);
+      const response = await fetch(`${API_BASE}/api/config`, { signal });
       if (!response.ok) {
         throw new Error(`HTTP ${response.status}: ${response.statusText}`);
       }
@@ -23,15 +24,16 @@ export function useApi() {
       setConfig(data);
       setSchema(data.schema);
     } catch (err) {
+      if ((err as Error).name === 'AbortError') return;
       console.error('Failed to fetch config:', err);
     }
   }, []);
 
-  const fetchTables = useCallback(async () => {
+  const fetchTables = useCallback(async (signal?: AbortSignal) => {
     setLoading(true);
     setError(null);
     try {
-      const response = await fetch(`${API_BASE}/api/schema/tables`);
+      const response = await fetch(`${API_BASE}/api/schema/tables`, { signal });
       if (!response.ok) {
         throw new Error(`HTTP ${response.status}: ${response.statusText}`);
       }
@@ -40,6 +42,7 @@ export function useApi() {
       setSchema(data.schema);
       return data.tables || [];
     } catch (err) {
+      if ((err as Error).name === 'AbortError') return [];
       const message = err instanceof Error ? err.message : 'Failed to fetch tables';
       setError(message);
       console.error('Failed to fetch tables:', err);
@@ -136,9 +139,16 @@ export function useApi() {
   }, []);
 
   useEffect(() => {
+    // Prevent duplicate initialization (e.g., from StrictMode double-mount or dependency changes)
+    if (initializedRef.current) return;
+    initializedRef.current = true;
+
+    const controller = new AbortController();
+    const signal = controller.signal;
+
     const init = async () => {
-      await fetchConfig();
-      const tableList = await fetchTables();
+      await fetchConfig(signal);
+      const tableList = await fetchTables(signal);
       if (tableList.length > 0) {
         await fetchAllTableInfo(tableList);
       }
@@ -146,11 +156,13 @@ export function useApi() {
     init();
 
     return () => {
+      controller.abort();
       if (abortControllerRef.current) {
         abortControllerRef.current.abort();
       }
     };
-  }, [fetchConfig, fetchTables, fetchAllTableInfo]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- Run only once on mount
+  }, []);
 
   return {
     tables,
