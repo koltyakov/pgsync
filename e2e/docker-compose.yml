@@ -1,5 +1,7 @@
 version: "3.8"
 
+name: pgsync_e2e
+
 services:
   source_db:
     image: postgres:16-alpine

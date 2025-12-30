@@ -2,6 +2,7 @@ package sync
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"path/filepath"
 	"sort"
@@ -9,6 +10,7 @@ import (
 	gosync "sync"
 	"time"
 
+	"github.com/koltyakov/pgsync/internal/db"
 	"github.com/koltyakov/pgsync/internal/table"
 )
 
@@ -29,9 +31,26 @@ func (s *Syncer) Sync(ctx context.Context) error {
 
 	s.logger.Debug("Found tables to sync", "count", len(tables), "tables", strings.Join(tables, ", "))
 
-	// Get table metadata for all tables
-	tableInfos := make([]*table.Info, 0, len(tables))
-	for _, tableName := range tables {
+	// Get FK dependencies for topological sort
+	deps, err := s.inspector.GetTableDependencies(ctx)
+	if err != nil {
+		s.logger.Warn("Failed to get table dependencies, syncing without dependency order", "error", err)
+		deps = nil
+	}
+
+	// Build a set of tables we're syncing (for filtering deps)
+	tableSet := make(map[string]bool)
+	for _, t := range tables {
+		tableSet[t] = true
+	}
+
+	// Sort tables by dependency order (parents first, then children)
+	sortedTables := topologicalSort(tables, deps, tableSet)
+	s.logger.Debug("Tables sorted by dependency order", "order", strings.Join(sortedTables, " -> "))
+
+	// Get table metadata for all tables (in sorted order)
+	tableInfos := make([]*table.Info, 0, len(sortedTables))
+	for _, tableName := range sortedTables {
 		info, err := s.inspector.GetTableInfo(ctx, tableName)
 		if err != nil {
 			s.logger.Warn("Failed to get table info", "table", tableName, "error", err)
@@ -40,38 +59,33 @@ func (s *Syncer) Sync(ctx context.Context) error {
 		tableInfos = append(tableInfos, info)
 	}
 
-	// Sort tables by estimated work (row count * complexity)
-	sort.Slice(tableInfos, func(i, j int) bool {
-		return tableInfos[i].EstimatedWork() > tableInfos[j].EstimatedWork()
-	})
+	// Group tables into dependency levels for parallel processing within each level
+	levels := groupByDependencyLevel(tableInfos, deps, tableSet)
 
-	// Create work channel and worker pool
-	workChan := make(chan *table.Info, len(tableInfos))
-	var wg gosync.WaitGroup
+	s.logger.Debug("Processing tables in dependency levels", "levels", len(levels))
 
-	// Start worker goroutines
-	for i := 0; i < s.cfg.Parallel; i++ {
-		wg.Add(1)
-		go func(workerID int) {
-			defer wg.Done()
-			s.worker(ctx, workerID, workChan)
-		}(i)
-	}
-
-	// Send work to workers
-	for _, info := range tableInfos {
-		select {
-		case workChan <- info:
-		case <-ctx.Done():
-			close(workChan)
-			wg.Wait()
+	// Process each level - tables within a level can be processed in parallel
+	for levelIdx, levelTables := range levels {
+		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-	}
-	close(workChan)
 
-	// Wait for all workers to complete
-	wg.Wait()
+		// Sort tables within level by estimated work (largest first for better load balancing)
+		sort.Slice(levelTables, func(i, j int) bool {
+			return levelTables[i].EstimatedWork() > levelTables[j].EstimatedWork()
+		})
+
+		levelNames := make([]string, len(levelTables))
+		for i, t := range levelTables {
+			levelNames[i] = t.Name
+		}
+		s.logger.Debug("Processing dependency level", "level", levelIdx+1, "tables", strings.Join(levelNames, ", "))
+
+		// Process this level with worker pool
+		if err := s.syncLevel(ctx, levelTables); err != nil {
+			return fmt.Errorf("failed to sync level %d: %w", levelIdx+1, err)
+		}
+	}
 
 	// Check if context was cancelled
 	if ctx.Err() != nil {
@@ -110,8 +124,62 @@ func (s *Syncer) Sync(ctx context.Context) error {
 	return nil
 }
 
-// worker processes table sync jobs
-func (s *Syncer) worker(ctx context.Context, workerID int, workChan <-chan *table.Info) {
+// syncLevel processes all tables in a dependency level using a worker pool
+func (s *Syncer) syncLevel(ctx context.Context, tableInfos []*table.Info) error {
+	if len(tableInfos) == 0 {
+		return nil
+	}
+
+	// Use fewer workers if we have fewer tables than parallel setting
+	numWorkers := s.cfg.Parallel
+	if len(tableInfos) < numWorkers {
+		numWorkers = len(tableInfos)
+	}
+
+	workChan := make(chan *table.Info, len(tableInfos))
+	errChan := make(chan error, len(tableInfos))
+	var wg gosync.WaitGroup
+
+	// Start worker goroutines
+	for i := 0; i < numWorkers; i++ {
+		wg.Add(1)
+		go func(workerID int) {
+			defer wg.Done()
+			s.levelWorker(ctx, workerID, workChan, errChan)
+		}(i)
+	}
+
+	// Send work to workers
+	for _, info := range tableInfos {
+		select {
+		case workChan <- info:
+		case <-ctx.Done():
+			close(workChan)
+			wg.Wait()
+			return ctx.Err()
+		}
+	}
+	close(workChan)
+
+	// Wait for all workers to complete
+	wg.Wait()
+	close(errChan)
+
+	// Collect any errors
+	var errs []string
+	for err := range errChan {
+		errs = append(errs, err.Error())
+	}
+
+	if len(errs) > 0 {
+		return fmt.Errorf("errors syncing tables: %s", strings.Join(errs, "; "))
+	}
+
+	return nil
+}
+
+// levelWorker processes table sync jobs for a single dependency level
+func (s *Syncer) levelWorker(ctx context.Context, workerID int, workChan <-chan *table.Info, errChan chan<- error) {
 	for {
 		select {
 		case tableInfo, ok := <-workChan:
@@ -120,11 +188,164 @@ func (s *Syncer) worker(ctx context.Context, workerID int, workChan <-chan *tabl
 			}
 			if err := s.syncTable(ctx, tableInfo); err != nil {
 				s.logger.Error("Error syncing table", "table", tableInfo.Name, "error", err)
+				errChan <- fmt.Errorf("table %s: %w", tableInfo.Name, err)
 			}
 		case <-ctx.Done():
 			return // Context cancelled
 		}
 	}
+}
+
+// topologicalSort sorts tables so that parent tables come before children (FK dependencies)
+func topologicalSort(tables []string, deps []db.TableDependency, tableSet map[string]bool) []string {
+	if len(deps) == 0 {
+		return tables
+	}
+
+	// Build adjacency list (table -> tables it depends on)
+	dependsOn := make(map[string][]string)
+	for _, dep := range deps {
+		// Only consider dependencies where both tables are in our sync set
+		if tableSet[dep.Table] && tableSet[dep.DependsOn] {
+			dependsOn[dep.Table] = append(dependsOn[dep.Table], dep.DependsOn)
+		}
+	}
+
+	// Kahn's algorithm for topological sort
+	// Calculate in-degree (number of dependencies) for each table
+	inDegree := make(map[string]int)
+	for _, t := range tables {
+		inDegree[t] = 0
+	}
+	for t, deps := range dependsOn {
+		inDegree[t] = len(deps)
+	}
+
+	// Start with tables that have no dependencies
+	var queue []string
+	for _, t := range tables {
+		if inDegree[t] == 0 {
+			queue = append(queue, t)
+		}
+	}
+
+	// Build reverse adjacency list (table -> tables that depend on it)
+	dependedBy := make(map[string][]string)
+	for t, deps := range dependsOn {
+		for _, dep := range deps {
+			dependedBy[dep] = append(dependedBy[dep], t)
+		}
+	}
+
+	// Process queue
+	var sorted []string
+	for len(queue) > 0 {
+		// Sort queue for deterministic order
+		sort.Strings(queue)
+		t := queue[0]
+		queue = queue[1:]
+		sorted = append(sorted, t)
+
+		// Reduce in-degree for tables that depend on this one
+		for _, dependent := range dependedBy[t] {
+			inDegree[dependent]--
+			if inDegree[dependent] == 0 {
+				queue = append(queue, dependent)
+			}
+		}
+	}
+
+	// If we couldn't sort all tables, there might be a cycle - add remaining tables
+	if len(sorted) < len(tables) {
+		sortedSet := make(map[string]bool)
+		for _, t := range sorted {
+			sortedSet[t] = true
+		}
+		for _, t := range tables {
+			if !sortedSet[t] {
+				sorted = append(sorted, t)
+			}
+		}
+	}
+
+	return sorted
+}
+
+// groupByDependencyLevel groups tables into levels where tables in the same level
+// have no dependencies on each other and can be synced in parallel
+func groupByDependencyLevel(tableInfos []*table.Info, deps []db.TableDependency, tableSet map[string]bool) [][]*table.Info {
+	if len(deps) == 0 || len(tableInfos) == 0 {
+		// No dependencies - all tables can be synced in parallel
+		return [][]*table.Info{tableInfos}
+	}
+
+	// Build dependency map
+	dependsOn := make(map[string]map[string]bool)
+	for _, dep := range deps {
+		if tableSet[dep.Table] && tableSet[dep.DependsOn] {
+			if dependsOn[dep.Table] == nil {
+				dependsOn[dep.Table] = make(map[string]bool)
+			}
+			dependsOn[dep.Table][dep.DependsOn] = true
+		}
+	}
+
+	// Build table info map for lookup
+	infoMap := make(map[string]*table.Info)
+	for _, info := range tableInfos {
+		infoMap[info.Name] = info
+	}
+
+	// Assign levels - a table's level is 1 + max level of its dependencies
+	levels := make(map[string]int)
+	var assignLevel func(tableName string) int
+	assignLevel = func(tableName string) int {
+		if level, ok := levels[tableName]; ok {
+			return level
+		}
+
+		maxDepLevel := -1
+		for dep := range dependsOn[tableName] {
+			if tableSet[dep] {
+				depLevel := assignLevel(dep)
+				if depLevel > maxDepLevel {
+					maxDepLevel = depLevel
+				}
+			}
+		}
+
+		levels[tableName] = maxDepLevel + 1
+		return levels[tableName]
+	}
+
+	// Calculate level for each table
+	for _, info := range tableInfos {
+		assignLevel(info.Name)
+	}
+
+	// Group by level
+	maxLevel := 0
+	for _, level := range levels {
+		if level > maxLevel {
+			maxLevel = level
+		}
+	}
+
+	result := make([][]*table.Info, maxLevel+1)
+	for _, info := range tableInfos {
+		level := levels[info.Name]
+		result[level] = append(result[level], info)
+	}
+
+	// Remove empty levels
+	var filtered [][]*table.Info
+	for _, level := range result {
+		if len(level) > 0 {
+			filtered = append(filtered, level)
+		}
+	}
+
+	return filtered
 }
 
 // getTablesList returns the list of tables to sync based on include/exclude filters

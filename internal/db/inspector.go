@@ -178,3 +178,60 @@ func (i *Inspector) getRowCount(ctx context.Context, tableName string) (int64, e
 	}
 	return 0, nil
 }
+
+// TableDependency represents a foreign key dependency between tables
+type TableDependency struct {
+	Table      string // The table that has the FK
+	DependsOn  string // The table that is referenced
+	Constraint string // The FK constraint name
+}
+
+// GetTableDependencies returns all foreign key dependencies for tables in the schema
+// This is used to determine the correct order for syncing tables
+func (i *Inspector) GetTableDependencies(ctx context.Context) ([]TableDependency, error) {
+	query := `
+		SELECT 
+			tc.table_name AS table_name,
+			ccu.table_name AS referenced_table,
+			tc.constraint_name
+		FROM information_schema.table_constraints tc
+		JOIN information_schema.constraint_column_usage ccu 
+			ON tc.constraint_name = ccu.constraint_name 
+			AND tc.table_schema = ccu.table_schema
+		WHERE tc.constraint_type = 'FOREIGN KEY'
+			AND tc.table_schema = $1
+			AND ccu.table_schema = $1
+		ORDER BY tc.table_name, ccu.table_name`
+
+	rows, err := i.sourceDB.QueryContext(ctx, query, i.schema)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query foreign key dependencies: %w", err)
+	}
+	defer func() {
+		_ = rows.Close()
+	}()
+
+	var deps []TableDependency
+	seen := make(map[string]bool) // Deduplicate (a table may have multiple FKs to same table)
+	for rows.Next() {
+		var dep TableDependency
+		if err := rows.Scan(&dep.Table, &dep.DependsOn, &dep.Constraint); err != nil {
+			return nil, fmt.Errorf("failed to scan dependency: %w", err)
+		}
+		// Skip self-references
+		if dep.Table == dep.DependsOn {
+			continue
+		}
+		key := dep.Table + "->" + dep.DependsOn
+		if !seen[key] {
+			seen[key] = true
+			deps = append(deps, dep)
+		}
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating dependencies: %w", err)
+	}
+
+	return deps, nil
+}

@@ -120,6 +120,7 @@ class DataSeeder:
         start = datetime.now()
         
         try:
+            self._seed_reference_data()
             self._load_existing_ids()
             self._seed_users()
             self._seed_teams()
@@ -149,6 +150,46 @@ class DataSeeder:
         finally:
             self.cursor.close()
             self.conn.close()
+    
+    def _seed_reference_data(self):
+        """Seed reference/lookup tables that other tables depend on."""
+        print("Seeding reference data...")
+        
+        # Pipeline Stages
+        stages = [
+            ('Prospecting', 'Initial contact and qualification', 1, 10.00),
+            ('Qualification', 'Determining fit and budget', 2, 20.00),
+            ('Proposal', 'Presenting solution and pricing', 3, 40.00),
+            ('Negotiation', 'Contract and terms discussion', 4, 60.00),
+            ('Closed Won', 'Deal successfully closed', 5, 100.00),
+            ('Closed Lost', 'Deal lost to competitor or no decision', 6, 0.00),
+        ]
+        execute_values(self.cursor, """
+            INSERT INTO pipeline_stages (name, description, display_order, probability)
+            VALUES %s
+        """, stages)
+        
+        # Product Categories
+        categories = [
+            ('Software', None, 'Software products and licenses', 1),
+            ('Hardware', None, 'Physical equipment and devices', 2),
+            ('Services', None, 'Professional and consulting services', 3),
+            ('Support', None, 'Maintenance and support plans', 4),
+            ('Training', None, 'Training and education services', 5),
+        ]
+        execute_values(self.cursor, """
+            INSERT INTO product_categories (name, parent_id, description, display_order)
+            VALUES %s
+        """, categories)
+        
+        # Price Books
+        self.cursor.execute("""
+            INSERT INTO price_books (name, description, is_default, is_active)
+            VALUES 
+                ('Standard', 'Standard pricing for all customers', true, true),
+                ('Enterprise', 'Discounted pricing for enterprise customers', false, true),
+                ('Partner', 'Special pricing for partners', false, true)
+        """)
             
     def _load_existing_ids(self):
         """Load existing reference IDs from database."""
@@ -532,7 +573,7 @@ class DataSeeder:
             data.append((
                 str(uuid.uuid4()),
                 random.choice(self.category_ids) if self.category_ids else None,
-                f"SKU-{random.randint(10000, 99999)}",
+                f"SKU-{i + 1:06d}",  # Sequential SKU to avoid duplicates
                 name,
                 fake.paragraph(),
                 Decimal(str(random.randint(100, 50000))),

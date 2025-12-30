@@ -14,7 +14,7 @@ This directory contains a complete end-to-end testing environment for pgsync, fe
 ./setup.sh small    # Options: small, medium, large, xlarge
 
 # 2. Run initial sync
-./run_sync.sh --verbose
+./run_sync.sh # --verbose
 
 # 3. Verify sync (compare row counts)
 ./compare_dbs.sh
@@ -23,7 +23,7 @@ This directory contains a complete end-to-end testing environment for pgsync, fe
 ./run_mutations.sh medium 60   # rate: slow|medium|fast|burst, duration in seconds
 
 # 5. Run sync again to sync changes
-./run_sync.sh --verbose
+./run_sync.sh # --verbose
 
 # 6. Cleanup when done
 ./teardown.sh --volumes

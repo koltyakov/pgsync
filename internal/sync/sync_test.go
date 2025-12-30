@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/koltyakov/pgsync/internal/config"
+	"github.com/koltyakov/pgsync/internal/db"
 	"github.com/koltyakov/pgsync/internal/table"
 )
 
@@ -346,4 +347,171 @@ func containsAt(s, substr string, start int) bool {
 		}
 	}
 	return false
+}
+
+func TestTopologicalSort(t *testing.T) {
+	tests := []struct {
+		name     string
+		tables   []string
+		deps     []db.TableDependency
+		validate func([]string) bool
+	}{
+		{
+			name:   "no dependencies",
+			tables: []string{"users", "products", "orders"},
+			deps:   nil,
+			validate: func(result []string) bool {
+				return len(result) == 3
+			},
+		},
+		{
+			name:   "simple chain: orders -> users",
+			tables: []string{"orders", "users"},
+			deps: []db.TableDependency{
+				{Table: "orders", DependsOn: "users", Constraint: "orders_user_id_fkey"},
+			},
+			validate: func(result []string) bool {
+				// users must come before orders
+				usersIdx, ordersIdx := -1, -1
+				for i, t := range result {
+					if t == "users" {
+						usersIdx = i
+					}
+					if t == "orders" {
+						ordersIdx = i
+					}
+				}
+				return usersIdx < ordersIdx && len(result) == 2
+			},
+		},
+		{
+			name:   "complex CRM dependencies",
+			tables: []string{"contacts", "organizations", "activities", "deals"},
+			deps: []db.TableDependency{
+				{Table: "contacts", DependsOn: "organizations", Constraint: "contacts_org_fkey"},
+				{Table: "activities", DependsOn: "contacts", Constraint: "activities_contact_fkey"},
+				{Table: "deals", DependsOn: "contacts", Constraint: "deals_contact_fkey"},
+			},
+			validate: func(result []string) bool {
+				// organizations must come before contacts
+				// contacts must come before activities and deals
+				indexOf := func(name string) int {
+					for i, t := range result {
+						if t == name {
+							return i
+						}
+					}
+					return -1
+				}
+				orgsIdx := indexOf("organizations")
+				contactsIdx := indexOf("contacts")
+				activitiesIdx := indexOf("activities")
+				dealsIdx := indexOf("deals")
+
+				return orgsIdx < contactsIdx &&
+					contactsIdx < activitiesIdx &&
+					contactsIdx < dealsIdx &&
+					len(result) == 4
+			},
+		},
+		{
+			name:   "multiple dependencies on same parent",
+			tables: []string{"parent", "child1", "child2", "grandchild"},
+			deps: []db.TableDependency{
+				{Table: "child1", DependsOn: "parent", Constraint: "child1_parent_fkey"},
+				{Table: "child2", DependsOn: "parent", Constraint: "child2_parent_fkey"},
+				{Table: "grandchild", DependsOn: "child1", Constraint: "grandchild_child1_fkey"},
+			},
+			validate: func(result []string) bool {
+				indexOf := func(name string) int {
+					for i, t := range result {
+						if t == name {
+							return i
+						}
+					}
+					return -1
+				}
+				parentIdx := indexOf("parent")
+				child1Idx := indexOf("child1")
+				child2Idx := indexOf("child2")
+				grandchildIdx := indexOf("grandchild")
+
+				return parentIdx < child1Idx &&
+					parentIdx < child2Idx &&
+					child1Idx < grandchildIdx &&
+					len(result) == 4
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tableSet := make(map[string]bool)
+			for _, t := range tt.tables {
+				tableSet[t] = true
+			}
+			result := topologicalSort(tt.tables, tt.deps, tableSet)
+			if !tt.validate(result) {
+				t.Errorf("topologicalSort failed, got order: %v", result)
+			}
+		})
+	}
+}
+
+func TestGroupByDependencyLevel(t *testing.T) {
+	tests := []struct {
+		name           string
+		tables         []*table.Info
+		deps           []db.TableDependency
+		expectedLevels int
+	}{
+		{
+			name: "no dependencies - all in one level",
+			tables: []*table.Info{
+				{Name: "users"},
+				{Name: "products"},
+			},
+			deps:           nil,
+			expectedLevels: 1,
+		},
+		{
+			name: "chain creates multiple levels",
+			tables: []*table.Info{
+				{Name: "organizations"},
+				{Name: "contacts"},
+				{Name: "activities"},
+			},
+			deps: []db.TableDependency{
+				{Table: "contacts", DependsOn: "organizations"},
+				{Table: "activities", DependsOn: "contacts"},
+			},
+			expectedLevels: 3,
+		},
+		{
+			name: "siblings at same level",
+			tables: []*table.Info{
+				{Name: "parent"},
+				{Name: "child1"},
+				{Name: "child2"},
+			},
+			deps: []db.TableDependency{
+				{Table: "child1", DependsOn: "parent"},
+				{Table: "child2", DependsOn: "parent"},
+			},
+			expectedLevels: 2, // parent at level 0, both children at level 1
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tableSet := make(map[string]bool)
+			for _, info := range tt.tables {
+				tableSet[info.Name] = true
+			}
+			levels := groupByDependencyLevel(tt.tables, tt.deps, tableSet)
+			if len(levels) != tt.expectedLevels {
+				t.Errorf("expected %d levels, got %d", tt.expectedLevels, len(levels))
+			}
+		})
+	}
 }

@@ -35,6 +35,13 @@ func (s *Syncer) upsertData(ctx context.Context, tableInfo *table.Info, rows [][
 		}
 	}()
 
+	// Defer all FK constraints to end of transaction to handle self-referential tables
+	// (e.g., users.manager_id -> users.id, product_categories.parent_id -> product_categories.id)
+	if _, err := tx.ExecContext(ctx, "SET CONSTRAINTS ALL DEFERRED"); err != nil {
+		// If deferred constraints aren't supported or not set as deferrable, continue without
+		s.logger.Debug("Could not defer constraints (may not be deferrable)", "table", tableInfo.Name)
+	}
+
 	// Process rows in bulk batches
 	for i := 0; i < len(rows); i += BulkBatchSize {
 		end := i + BulkBatchSize

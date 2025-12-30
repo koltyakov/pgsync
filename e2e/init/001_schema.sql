@@ -1,5 +1,5 @@
--- CRM Database Schema Migration
--- This creates a realistic CRM schema with 15+ tables covering:
+-- CRM Database Schema
+-- This creates a realistic CRM schema with 20 tables covering:
 -- - Organizations & Contacts
 -- - Sales Pipeline (Leads, Opportunities, Deals)
 -- - Customer Support (Tickets, Comments)
@@ -111,6 +111,8 @@ CREATE TABLE pipeline_stages (
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
+CREATE INDEX idx_pipeline_stages_updated_at ON pipeline_stages(updated_at);
+
 -- Opportunities (qualified sales opportunities)
 CREATE TABLE opportunities (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -176,13 +178,16 @@ CREATE INDEX idx_deals_updated_at ON deals(updated_at);
 CREATE TABLE product_categories (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     name VARCHAR(100) NOT NULL,
-    parent_id UUID REFERENCES product_categories(id),
+    parent_id UUID REFERENCES product_categories(id) DEFERRABLE INITIALLY DEFERRED,
     description TEXT,
     display_order INTEGER DEFAULT 0,
     is_active BOOLEAN DEFAULT TRUE,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
+
+CREATE INDEX idx_product_categories_parent ON product_categories(parent_id);
+CREATE INDEX idx_product_categories_updated_at ON product_categories(updated_at);
 
 -- Products
 CREATE TABLE products (
@@ -221,6 +226,8 @@ CREATE TABLE price_books (
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
+
+CREATE INDEX idx_price_books_updated_at ON price_books(updated_at);
 
 -- Price Book Entries
 CREATE TABLE price_book_entries (
@@ -414,7 +421,7 @@ CREATE TABLE users (
     avatar_url VARCHAR(500),
     role VARCHAR(50) DEFAULT 'user',
     department VARCHAR(100),
-    manager_id UUID REFERENCES users(id),
+    manager_id UUID REFERENCES users(id) DEFERRABLE INITIALLY DEFERRED,
     is_active BOOLEAN DEFAULT TRUE,
     last_login_at TIMESTAMP WITH TIME ZONE,
     timezone VARCHAR(100) DEFAULT 'UTC',
@@ -434,7 +441,7 @@ CREATE TABLE teams (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     name VARCHAR(100) NOT NULL,
     description TEXT,
-    manager_id UUID REFERENCES users(id),
+    manager_id UUID REFERENCES users(id) DEFERRABLE INITIALLY DEFERRED,
     is_active BOOLEAN DEFAULT TRUE,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
@@ -482,30 +489,3 @@ CREATE INDEX idx_audit_logs_table ON audit_logs(table_name);
 CREATE INDEX idx_audit_logs_record ON audit_logs(record_id);
 CREATE INDEX idx_audit_logs_user ON audit_logs(user_id);
 CREATE INDEX idx_audit_logs_created ON audit_logs(created_at);
-
--- ============================================================================
--- INSERT DEFAULT DATA
--- ============================================================================
-
--- Insert default pipeline stages
-INSERT INTO pipeline_stages (name, description, display_order, probability) VALUES
-    ('Prospecting', 'Initial contact and qualification', 1, 10.00),
-    ('Qualification', 'Understanding needs and budget', 2, 20.00),
-    ('Proposal', 'Presenting solution and pricing', 3, 40.00),
-    ('Negotiation', 'Contract and terms discussion', 4, 60.00),
-    ('Closed Won', 'Deal successfully closed', 5, 100.00),
-    ('Closed Lost', 'Deal lost to competitor or no decision', 6, 0.00);
-
--- Insert default price book
-INSERT INTO price_books (name, description, is_default, is_active) VALUES
-    ('Standard Price Book', 'Default pricing for all customers', true, true);
-
--- Insert default product categories
-INSERT INTO product_categories (name, description, display_order) VALUES
-    ('Software', 'Software licenses and subscriptions', 1),
-    ('Hardware', 'Physical equipment and devices', 2),
-    ('Services', 'Professional and consulting services', 3),
-    ('Support', 'Support and maintenance plans', 4),
-    ('Training', 'Training and certification programs', 5);
-
-COMMIT;

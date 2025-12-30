@@ -1,6 +1,6 @@
 #!/bin/bash
 # Teardown E2E test environment
-# Usage: ./teardown.sh [--volumes]
+# Usage: ./teardown.sh [--keep-volumes]
 
 set -e
 
@@ -16,11 +16,12 @@ fi
 
 echo "Stopping and removing containers..."
 
-if [[ "$1" == "--volumes" ]]; then
+if [[ "$1" == "--keep-volumes" ]]; then
+    echo "Keeping volumes..."
+    $COMPOSE_CMD down
+else
     echo "Also removing volumes..."
     $COMPOSE_CMD down -v
-else
-    $COMPOSE_CMD down
 fi
 
 echo "Done!"

@@ -14,7 +14,9 @@ Lightweight, reliable data synchronization for PostgreSQL. pgsync focuses on dat
 git clone https://github.com/koltyakov/pgsync.git
 cd pgsync
 go build -o pgsync
-./pgsync -source "postgres://user:pass@source:5432/db" -target "postgres://user:pass@target:5432/db"
+./pgsync \
+  -source "postgres://user:pass@source:5432/db" \
+  -target "postgres://user:pass@target:5432/db"
 ```
 
 ## Config (JSON)
