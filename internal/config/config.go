@@ -23,6 +23,7 @@ type Config struct {
 	Verbose       bool     `json:"verbose"`
 	Integrity     bool     `json:"integrity"`
 	DryRun        bool     `json:"dryRun"`
+	Reconcile     bool     `json:"reconcile"` // Force full comparison by primary key, ignore timestamps
 
 	// Connection pool settings (optional, defaults are computed from Parallel)
 	MaxOpenConns    int           `json:"maxOpenConns,omitempty"`

@@ -37,6 +37,7 @@ func main() {
 		verbose    = flag.Bool("verbose", false, "Enable verbose logging")
 		integrity  = flag.Bool("integrity", false, "Run post-sync integrity checks and write integrity.csv")
 		dryRun     = flag.Bool("dry-run", false, "Preview sync operations without making changes")
+		reconcile  = flag.Bool("reconcile", false, "Full reconciliation mode: compare all rows by primary key, sync missing/different rows")
 		configFile = flag.String("config", "", "Path to configuration file")
 	)
 
@@ -52,6 +53,7 @@ func main() {
 		Verbose:      *verbose,
 		Integrity:    *integrity,
 		DryRun:       *dryRun,
+		Reconcile:    *reconcile,
 	}
 
 	if *include != "" {

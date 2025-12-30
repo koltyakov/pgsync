@@ -338,6 +338,22 @@ func (s *Syncer) syncTable(ctx context.Context, tableInfo *table.Info) error {
 		)
 	}()
 
+	// Reconcile mode: full comparison by primary key, ignore timestamps
+	if s.cfg.Reconcile {
+		if len(tableInfo.PrimaryKey) == 0 {
+			s.logger.Debug("Table has no primary key, skipping reconciliation",
+				"table", tableName,
+			)
+			s.addSkipped(tableName)
+			return nil
+		}
+		s.logger.Debug("Reconciliation mode: comparing all rows by primary key",
+			"table", tableName,
+			"rowCount", tableInfo.RowCount,
+		)
+		return s.syncTableReconcile(ctx, tableInfo)
+	}
+
 	// Check if table has timestamp column
 	hasTimestamp := tableInfo.HasColumn(s.cfg.TimestampCol)
 

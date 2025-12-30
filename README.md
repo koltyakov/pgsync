@@ -34,7 +34,9 @@ Create `config.json` to store flags you use often:
   "includeTables": ["users", "orders"],
   "excludeTables": ["logs"],
   "verbose": true,
-  "integrity": false
+  "integrity": false,
+  "reconcile": false,
+  "dryRun": false
 }
 ```
 
@@ -72,6 +74,8 @@ Create `config.json` to store flags you use often:
 | `-batch-size` | Rows per batch | `1000` |
 | `-verbose` | Verbose logging | `false` |
 | `-integrity` | Run post-sync integrity checks and write `integrity.csv` | `false` |
+| `-reconcile` | Full reconciliation mode (compare all rows by PK) | `false` |
+| `-dry-run` | Preview sync operations without making changes | `false` |
 | `-config` | Path to JSON config file | none |
 
 ### Wildcard patterns
@@ -90,12 +94,49 @@ Examples: `user_*`, `*_log`, `temp_???`, `audit_[0-9]*`.
 - Requires proper indexes on timestamp and primary key columns for best performance.
 - Use `-parallel` and `-batch-size` to tune throughput vs load on source/target.
 
+## Sync modes
+
+### Incremental sync (default)
+
+The default mode uses timestamp-based incremental sync:
+
+- Uses the target's maximum timestamp to pick the starting point
+- Processes rows in timestamp-ordered batches
+- Performs `INSERT ... ON CONFLICT DO UPDATE` upserts
+- Optionally detects and deletes rows present in target but not in source
+
+This is the most efficient mode for regular synchronization when all changes update the timestamp column.
+
+### Reconcile mode
+
+Use `-reconcile` for full primary key comparison:
+
+```bash
+./pgsync -source "..." -target "..." -reconcile
+```
+
+Reconcile mode:
+
+- Compares all primary keys between source and target
+- Finds rows missing in target and inserts them
+- Finds rows in target that don't exist in source and deletes them
+- Ignores timestamps entirely — useful when timestamp-based sync misses changes
+
+Use reconcile mode when:
+
+- You need to ensure full consistency between databases
+- Timestamp-based sync can't detect all changes (e.g., direct SQL updates)
+- You want periodic full reconciliation as a safety net
+
+**Note:** Reconcile mode loads all primary keys into memory. For very large tables (100M+ rows), consider using table filters to reconcile in batches.
+
 ## How it works (brief)
 
 - Discovers tables in the schema and applies include/exclude filters.
-- Uses the target's maximum timestamp (or zero if empty) to pick the starting point.
-- Processes rows in timestamp-ordered batches and performs `INSERT ... ON CONFLICT DO UPDATE` upserts.
-- Optionally detects and deletes rows present in target but not in source when the target is caught up.
+- Sorts tables by foreign key dependencies to ensure referential integrity.
+- In incremental mode: uses timestamps to find changed rows.
+- In reconcile mode: compares all PKs to find missing/extra rows.
+- Processes rows in batches and performs `INSERT ... ON CONFLICT DO UPDATE` upserts.
 
 ## Integrity checks (optional)
 
