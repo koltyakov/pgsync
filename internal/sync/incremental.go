@@ -52,11 +52,14 @@ func (s *Syncer) syncTableIncremental(ctx context.Context, tableInfo *table.Info
 			return nil
 		}
 
-		// Only handle deletions if target is caught up with source
+		// Only handle deletions and missing rows if target is caught up with source
 		if !targetMaxTS.IsZero() && !sourceMaxTS.IsZero() && (targetMaxTS.Equal(sourceMaxTS) || targetMaxTS.After(sourceMaxTS)) {
-			s.logger.Debug("Checking for deletions", "table", tableName)
+			s.logger.Debug("Checking for row differences", "table", tableName)
 			if err := s.handleDeletedRows(ctx, tableInfo); err != nil {
 				return fmt.Errorf("failed to handle deleted rows: %w", err)
+			}
+			if err := s.handleMissingRows(ctx, tableInfo); err != nil {
+				return fmt.Errorf("failed to handle missing rows: %w", err)
 			}
 		}
 
@@ -86,7 +89,7 @@ func (s *Syncer) syncTableIncremental(ctx context.Context, tableInfo *table.Info
 		currentTS = nextTS.Add(time.Microsecond) // Move slightly forward to avoid duplicate processing
 	}
 
-	// After successful incremental sync, check if we should handle deletions
+	// After successful incremental sync, check if we should handle deletions and missing rows
 	sourceMaxTS, err := s.getSourceMaxTimestamp(ctx, tableName)
 	if err != nil {
 		return fmt.Errorf("failed to get source max timestamp: %w", err)
@@ -97,11 +100,18 @@ func (s *Syncer) syncTableIncremental(ctx context.Context, tableInfo *table.Info
 		return fmt.Errorf("failed to get target max timestamp: %w", err)
 	}
 
-	// Only handle deletions if target is caught up with source
+	// Handle deletions and missing rows if target is caught up with source
 	if !targetMaxTS.IsZero() && !sourceMaxTS.IsZero() && (targetMaxTS.Equal(sourceMaxTS) || targetMaxTS.After(sourceMaxTS)) {
-		s.logger.Debug("Sync completed, checking for deletions", "table", tableName)
+		s.logger.Debug("Sync completed, checking for row differences", "table", tableName)
+
+		// Handle rows that exist in target but not in source (deletions)
 		if err := s.handleDeletedRows(ctx, tableInfo); err != nil {
 			return fmt.Errorf("failed to handle deleted rows: %w", err)
+		}
+
+		// Handle rows that exist in source but not in target (missing inserts)
+		if err := s.handleMissingRows(ctx, tableInfo); err != nil {
+			return fmt.Errorf("failed to handle missing rows: %w", err)
 		}
 	}
 
