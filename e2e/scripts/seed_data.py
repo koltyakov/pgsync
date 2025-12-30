@@ -235,6 +235,19 @@ class DataSeeder:
             minutes=random.randint(0, 59),
             seconds=random.randint(0, 59)
         )
+    
+    def _updated_at(self, created: datetime, max_days: int = 30) -> datetime:
+        """Generate an updated_at timestamp between created and now (never in future)."""
+        now = datetime.now()
+        max_delta = min((now - created).days, max_days)
+        if max_delta <= 0:
+            return created
+        return created + timedelta(
+            days=random.randint(0, max_delta),
+            hours=random.randint(0, 23),
+            minutes=random.randint(0, 59),
+            seconds=random.randint(0, 59)
+        )
         
     def _seed_users(self):
         """Seed users table."""
@@ -261,7 +274,7 @@ class DataSeeder:
                 random.choice(['UTC', 'America/New_York', 'America/Los_Angeles', 'Europe/London']),
                 'en-US',
                 created,
-                created + timedelta(days=random.randint(0, 30)),
+                self._updated_at(created, 30),
             ))
             
         columns = [
@@ -373,7 +386,7 @@ class DataSeeder:
                 random.choice(statuses),
                 random.choice(LEAD_SOURCES),
                 created,
-                created + timedelta(days=random.randint(0, 60)),
+                self._updated_at(created, 60),
             ))
             
         columns = [
@@ -500,7 +513,7 @@ class DataSeeder:
                 fake.sentence() if random.random() > 0.5 else None,
                 ', '.join(random.sample(['Competitor A', 'Competitor B', 'Competitor C', 'In-house'], random.randint(0, 2))) or None,
                 created,
-                created + timedelta(days=random.randint(0, 30)),
+                self._updated_at(created, 30),
             ))
             
         columns = [
@@ -522,7 +535,10 @@ class DataSeeder:
         data = []
         for _ in range(count):
             created = self._random_timestamp(365)
+            # Start date is within 30 days after created (but created is already in the past)
             start = created + timedelta(days=random.randint(0, 30))
+            # End date is 30-365 days after start
+            end = start + timedelta(days=random.randint(30, 365))
             
             data.append((
                 str(uuid.uuid4()),
@@ -534,15 +550,15 @@ class DataSeeder:
                 'USD',
                 random.choice(['active', 'active', 'active', 'completed', 'cancelled']),
                 start.date(),
-                (start + timedelta(days=random.randint(30, 365))).date(),
+                end.date(),
                 f"CNT-{random.randint(10000, 99999)}",
                 random.choice(payment_terms),
                 random.choice(billing_freq),
-                created + timedelta(days=random.randint(0, 14)),
+                self._updated_at(created, 14),
                 random.choice(self.user_ids) if self.user_ids else None,
                 fake.paragraph() if random.random() > 0.5 else None,
                 created,
-                created + timedelta(days=random.randint(0, 30)),
+                self._updated_at(created, 30),
             ))
             
         columns = [
@@ -723,7 +739,7 @@ class DataSeeder:
                 fake.sentence() if status == 'closed' and random.random() > 0.5 else None,
                 random.sample(['urgent', 'vip', 'escalated', 'follow-up'], random.randint(0, 2)) or None,
                 created,
-                created + timedelta(days=random.randint(0, 7)),
+                self._updated_at(created, 7),
             ))
             
         columns = [
@@ -780,7 +796,8 @@ class DataSeeder:
             created = self._random_timestamp(180)
             activity_type = random.choice(ACTIVITY_TYPES)
             status = random.choice(ACTIVITY_STATUSES)
-            start = created + timedelta(days=random.randint(-30, 30))
+            # Ensure start_time stays in the past (relative to created which is already in past)
+            start = created - timedelta(days=random.randint(0, 30))
             duration = random.randint(15, 120)
             
             data.append((
@@ -806,7 +823,7 @@ class DataSeeder:
                 False,
                 None,
                 created,
-                created + timedelta(days=random.randint(0, 7)),
+                self._updated_at(created, 7),
             ))
             
         columns = [

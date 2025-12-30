@@ -335,6 +335,8 @@ class MutationSimulator:
     def _insert_activity(self):
         now = datetime.now()
         activity_type = random.choice(['call', 'meeting', 'task', 'email', 'note'])
+        # Use past or current time for start_time to ensure incremental sync works
+        start_time = now - timedelta(days=random.randint(0, 7), hours=random.randint(0, 23))
         self.cursor.execute("""
             INSERT INTO activities (id, type, subject, status, priority, start_time, 
                 organization_id, contact_id, assigned_to, created_at, updated_at)
@@ -343,7 +345,7 @@ class MutationSimulator:
             str(uuid.uuid4()), activity_type, fake.sentence(),
             random.choice(['planned', 'in_progress', 'completed']),
             random.choice(['low', 'normal', 'high']),
-            now + timedelta(days=random.randint(-7, 30)),
+            start_time,
             self._get_random_id('organizations'),
             self._get_random_id('contacts'),
             self._get_random_id('users'),

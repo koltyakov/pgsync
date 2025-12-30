@@ -133,6 +133,16 @@ postgres://postgres:postgres@localhost:5434/crm_target?sslmode=disable
 ./compare_dbs.sh                      # Verify
 ```
 
+### Reconcile Mode Test
+
+```bash
+./setup.sh small
+./run_sync.sh --verbose               # Initial sync
+./run_mutations.sh medium 30          # Generate changes
+./run_sync.sh --reconcile --verbose   # Full reconciliation by PK
+./compare_dbs.sh                      # Verify all rows match
+```
+
 ### Performance Test
 
 ```bash
