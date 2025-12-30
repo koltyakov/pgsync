@@ -8,7 +8,6 @@ Runs continuously or for a specified duration to generate changes for sync testi
 import argparse
 import random
 import signal
-import sys
 import time
 import uuid
 from datetime import datetime, timedelta

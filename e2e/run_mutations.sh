@@ -14,13 +14,13 @@ DURATION="${2:-}"
 
 source venv/bin/activate
 
-ARGS="--rate $RATE"
-if [ -n "$DURATION" ]; then
-    ARGS="$ARGS --duration $DURATION"
-fi
-
 echo "Starting mutation simulator (rate: $RATE)..."
 echo "Press Ctrl+C to stop"
 echo ""
 
-python mutate_data.py $ARGS
+# Pass arguments directly to avoid shell injection
+if [ -n "$DURATION" ]; then
+    python mutate_data.py --rate "$RATE" --duration "$DURATION"
+else
+    python mutate_data.py --rate "$RATE"
+fi

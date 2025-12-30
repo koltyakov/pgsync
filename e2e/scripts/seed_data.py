@@ -7,7 +7,6 @@ Supports configurable data volumes from hundreds to millions of rows.
 
 import argparse
 import random
-import string
 import uuid
 from datetime import datetime, timedelta
 from decimal import Decimal

@@ -1,4 +1,4 @@
-# pgsync — PostgreSQL data sync utility
+# pgsync - PostgreSQL data sync utility
 
 Lightweight, reliable data synchronization for PostgreSQL. pgsync focuses on data-only sync between two Postgres databases using timestamp-based incremental updates, safe upserts, and optional table filtering.
 
