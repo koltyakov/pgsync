@@ -49,6 +49,10 @@ func (i *Inspector) GetTables(ctx context.Context) ([]string, error) {
 		tables = append(tables, tableName)
 	}
 
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating tables: %w", err)
+	}
+
 	return tables, nil
 }
 
@@ -93,7 +97,7 @@ func (i *Inspector) getColumns(ctx context.Context, tableName string) ([]string,
 
 	rows, err := i.sourceDB.QueryContext(ctx, query, i.schema, tableName)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to query columns: %w", err)
 	}
 	defer func() {
 		_ = rows.Close() // Ignore error in deferred close
@@ -103,9 +107,13 @@ func (i *Inspector) getColumns(ctx context.Context, tableName string) ([]string,
 	for rows.Next() {
 		var columnName string
 		if err := rows.Scan(&columnName); err != nil {
-			return nil, err
+			return nil, fmt.Errorf("failed to scan column name: %w", err)
 		}
 		columns = append(columns, columnName)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating columns: %w", err)
 	}
 
 	return columns, nil
@@ -124,7 +132,7 @@ func (i *Inspector) getPrimaryKey(ctx context.Context, tableName string) ([]stri
 	fullTableName := fmt.Sprintf("%s.\"%s\"", i.schema, tableName)
 	rows, err := i.sourceDB.QueryContext(ctx, query, fullTableName)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to query primary key for %s: %w", tableName, err)
 	}
 	defer func() {
 		_ = rows.Close() // Ignore error in deferred close
@@ -134,9 +142,13 @@ func (i *Inspector) getPrimaryKey(ctx context.Context, tableName string) ([]stri
 	for rows.Next() {
 		var columnName string
 		if err := rows.Scan(&columnName); err != nil {
-			return nil, err
+			return nil, fmt.Errorf("failed to scan primary key column: %w", err)
 		}
 		primaryKey = append(primaryKey, columnName)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating primary key columns: %w", err)
 	}
 
 	return primaryKey, nil
