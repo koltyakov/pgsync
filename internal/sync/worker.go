@@ -251,17 +251,7 @@ func (s *Syncer) levelWorkerWithIndex(ctx context.Context, workerID int, workCha
 			if cols, ok := s.cfg.IncludeColumns[work.info.Name]; ok && len(cols) > 0 {
 				tableInfo = work.info.FilterColumns(cols)
 				if len(tableInfo.Columns) < originalColCount {
-					// Find ignored columns
-					syncingSet := make(map[string]bool)
-					for _, c := range tableInfo.Columns {
-						syncingSet[c] = true
-					}
-					var ignoredCols []string
-					for _, c := range originalColumns {
-						if !syncingSet[c] {
-							ignoredCols = append(ignoredCols, c)
-						}
-					}
+					ignoredCols := findIgnoredColumns(originalColumns, tableInfo.Columns)
 					s.logger.Info("Partial table sync (columns filtered by config)",
 						"table", work.info.Name,
 						"columns", fmt.Sprintf("%d/%d", len(tableInfo.Columns), originalColCount),
@@ -270,17 +260,7 @@ func (s *Syncer) levelWorkerWithIndex(ctx context.Context, workerID int, workCha
 				}
 			} else if len(tableInfo.Columns) < originalColCount {
 				// Columns were filtered due to missing in target (done earlier in Sync)
-				// Find ignored columns
-				syncingSet := make(map[string]bool)
-				for _, c := range tableInfo.Columns {
-					syncingSet[c] = true
-				}
-				var ignoredCols []string
-				for _, c := range originalColumns {
-					if !syncingSet[c] {
-						ignoredCols = append(ignoredCols, c)
-					}
-				}
+				ignoredCols := findIgnoredColumns(originalColumns, tableInfo.Columns)
 				s.logger.Info("Partial table sync (columns missing in target)",
 					"table", work.info.Name,
 					"columns", fmt.Sprintf("%d/%d", len(tableInfo.Columns), originalColCount))
@@ -298,6 +278,21 @@ func (s *Syncer) levelWorkerWithIndex(ctx context.Context, workerID int, workCha
 			return // Context cancelled
 		}
 	}
+}
+
+// findIgnoredColumns returns columns from original that are not in syncing
+func findIgnoredColumns(original, syncing []string) []string {
+	syncingSet := make(map[string]bool, len(syncing))
+	for _, c := range syncing {
+		syncingSet[c] = true
+	}
+	var ignored []string
+	for _, c := range original {
+		if !syncingSet[c] {
+			ignored = append(ignored, c)
+		}
+	}
+	return ignored
 }
 
 // topologicalSort sorts tables so that parent tables come before children (FK dependencies)

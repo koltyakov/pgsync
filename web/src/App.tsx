@@ -51,11 +51,12 @@ function App() {
     for (const [tableName, sel] of Object.entries(selection)) {
       if (sel.selected && sel.columns.size > 0) {
         columns[tableName] = Array.from(sel.columns);
-        // Check if this is a partial sync
+        // Check if this is a partial sync (some columns excluded)
         const tableInfo = tableInfoMap.get(tableName);
         const syncableColumns = tableInfo?.columns.filter(c => c.existsInTarget) || [];
-        if (sel.columns.size < syncableColumns.length) {
-          partialSyncTables.push(`${tableName} (${sel.columns.size}/${syncableColumns.length} cols)`);
+        const excludedCount = syncableColumns.length - sel.columns.size;
+        if (excludedCount > 0) {
+          partialSyncTables.push(`${tableName} (${excludedCount} cols excluded)`);
         }
       }
     }
@@ -73,6 +74,7 @@ function App() {
       }
       message.success('Sync started');
     } else {
+      resetState(); // Clean up state on failure
       message.error('Failed to start sync');
     }
   };
@@ -104,7 +106,7 @@ function App() {
         const allColumns = tableInfo.columns.map(c => c.name);
         newSelection[tableName] = {
           selected: false,
-          columns: new Set(allColumns),
+          columns: new Set(),
           allColumns,
           primaryKeys: tableInfo.primaryKey,
         };
@@ -123,7 +125,7 @@ function App() {
     if (syncState.progress === 100 && !syncState.running && !syncState.error) {
       refreshStats();
     }
-  }, [syncState.progress, syncState.running, syncState.error]);
+  }, [syncState.progress, syncState.running, syncState.error, refreshStats]);
 
   // Resizable sider logic
   const handleMouseDown = (e: React.MouseEvent) => {

@@ -43,14 +43,17 @@ func (t *Info) FullName() string {
 	return t.Schema + "." + t.Name
 }
 
-// FilterColumns returns a new Info with only the specified columns
-// Primary key columns are always included even if not in the filter
+// FilterColumns returns a new Info with only the specified columns.
+// Primary key columns are always included even if not in the filter.
+// Uses case-insensitive matching because PostgreSQL normalizes unquoted
+// identifiers to lowercase, so user input may differ in case from stored names.
 func (t *Info) FilterColumns(includeColumns []string) *Info {
 	if len(includeColumns) == 0 {
 		return t // No filter, return original
 	}
 
 	// Build a set of columns to include (always include PKs)
+	// Use lowercase keys for case-insensitive matching
 	includeSet := make(map[string]bool)
 	for _, col := range includeColumns {
 		includeSet[strings.ToLower(col)] = true
@@ -59,7 +62,7 @@ func (t *Info) FilterColumns(includeColumns []string) *Info {
 		includeSet[strings.ToLower(pk)] = true
 	}
 
-	// Filter columns while preserving order
+	// Filter columns while preserving order and original case
 	var filtered []string
 	for _, col := range t.Columns {
 		if includeSet[strings.ToLower(col)] {

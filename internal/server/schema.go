@@ -104,6 +104,10 @@ func (s *Server) handleGetTableInfo(w http.ResponseWriter, r *http.Request) {
 	sourceInspector := db.NewInspector(sourceDB, nil, s.schema)
 	info, err := sourceInspector.GetTableInfo(ctx, tableName)
 	if err != nil {
+		// Don't log context canceled as error - it's expected when client aborts request
+		if ctx.Err() != nil {
+			return // Client disconnected, no need to respond
+		}
 		s.writeError(w, "Failed to get table info", err, http.StatusInternalServerError)
 		return
 	}

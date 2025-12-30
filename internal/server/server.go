@@ -76,7 +76,20 @@ func New(cfg *Config) *Server {
 		clients:  make(map[*websocket.Conn]bool),
 		upgrader: websocket.Upgrader{
 			CheckOrigin: func(r *http.Request) bool {
-				return true // Allow all origins for local dev
+				// Allow same-origin requests (when Origin header matches Host)
+				origin := r.Header.Get("Origin")
+				if origin == "" {
+					return true // No origin header (e.g., non-browser clients)
+				}
+				// For local development, allow localhost on any port
+				host := r.Host
+				localhostPattern := regexp.MustCompile(`^https?://(localhost|127\.0\.0\.1)(:\d+)?$`)
+				if localhostPattern.MatchString(origin) && (host == "localhost" || host == "127.0.0.1" ||
+					regexp.MustCompile(`^(localhost|127\.0\.0\.1)(:\d+)?$`).MatchString(host)) {
+					return true
+				}
+				// Allow if origin matches the host
+				return origin == "http://"+host || origin == "https://"+host
 			},
 		},
 		syncState: &SyncState{},
@@ -185,13 +198,20 @@ type ConfigResponse struct {
 }
 
 // maskPassword replaces password in connection string with ***
+// Handles various PostgreSQL connection string formats:
+// - URI format: postgres://user:password@host/db
+// - Query param with &: &password=secret&
+// - Query param at start: ?password=secret&
+// - Query param at end: &password=secret
+// - Key=value format: password=secret (space or end of string)
 func maskPassword(connStr string) string {
-	// Match patterns like :password@ or password=xxx
+	// Match URI format: :password@
 	re := regexp.MustCompile(`(:)([^:@]+)(@)`)
 	masked := re.ReplaceAllString(connStr, "$1***$3")
 
-	// Also handle password=xxx format
-	re2 := regexp.MustCompile(`(password=)([^&\s]+)`)
+	// Match password in query params or key=value format
+	// Handles: ?password=xxx, &password=xxx, password=xxx (at end or followed by space/&)
+	re2 := regexp.MustCompile(`([?&]?password=)([^&\s]*)`)
 	masked = re2.ReplaceAllString(masked, "$1***")
 
 	return masked

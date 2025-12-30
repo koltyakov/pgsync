@@ -154,9 +154,9 @@ export function SchemaTree({
               textDecoration: tableExistsInTarget ? 'none' : 'line-through',
             }}>{tableName}</span>
             {isPartialSync && (
-              <Tooltip title={`Partial sync: ${selectedColumns.size} of ${syncableColumns.length} columns selected`}>
+              <Tooltip title={`Partial sync: ${syncableColumns.length - selectedColumns.size} columns excluded`}>
                 <Tag color="warning" style={{ fontSize: 10 }}>
-                  {selectedColumns.size}/{syncableColumns.length} cols
+                  {syncableColumns.length - selectedColumns.size} excluded
                 </Tag>
               </Tooltip>
             )}
@@ -236,8 +236,8 @@ export function SchemaTree({
       const tableToggled = wasTableSelected !== tableKeyChecked && columnCountSame;
       
       // Determine new state
-      let isSelected = false;
-      let finalColumns = new Set<string>();
+      let isSelected: boolean;
+      let finalColumns: Set<string>;
       
       if (tableToggled && tableKeyChecked) {
         // Table checkbox was checked - select only syncable columns (exist in target)
@@ -274,6 +274,7 @@ export function SchemaTree({
   }, [tables, tableInfoMap, selection, onSelectionChange]);
 
   // Initialize selection when table info is loaded
+  // Note: onSelectionChange is expected to be a stable reference (e.g., setState from useState)
   useEffect(() => {
     if (tables.length === 0 || tableInfoMap.size === 0) return;
     
@@ -296,7 +297,7 @@ export function SchemaTree({
       }
     }
     onSelectionChange(initialSelection);
-  }, [tables, tableInfoMap]);
+  }, [tables, tableInfoMap, selection, onSelectionChange]);
 
   if (loading) {
     return (

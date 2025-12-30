@@ -101,7 +101,10 @@ export function useApi() {
     }
 
     setLoadingStats(false);
-  }, [tables, fetchTableInfo]);
+    // Note: `tables` is intentionally excluded from deps to avoid re-render loops.
+    // Callers should pass tableList explicitly when tables state might be stale.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fetchTableInfo]);
 
   const refreshStats = useCallback(async () => {
     const tableList = await fetchTables();
@@ -147,7 +150,7 @@ export function useApi() {
         abortControllerRef.current.abort();
       }
     };
-  }, []);
+  }, [fetchConfig, fetchTables, fetchAllTableInfo]);
 
   return {
     tables,
