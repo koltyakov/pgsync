@@ -1,3 +1,4 @@
+// Package server provides a web UI for pgsync with WebSocket-based real-time updates.
 package server
 
 import (
@@ -14,7 +15,17 @@ import (
 	webui "github.com/koltyakov/pgsync/web"
 )
 
-// Server provides a web UI for pgsync
+// Server timeouts - conservative values for reliability
+const (
+	serverReadTimeout       = 30 * time.Second
+	serverReadHeaderTimeout = 10 * time.Second
+	serverWriteTimeout      = 60 * time.Second
+	serverIdleTimeout       = 120 * time.Second
+	shutdownTimeout         = 5 * time.Second
+)
+
+// Server provides a web UI for pgsync.
+// It is safe for concurrent use from multiple goroutines.
 type Server struct {
 	port     int
 	sourceDB string
@@ -30,7 +41,8 @@ type Server struct {
 	logger     *slog.Logger
 }
 
-// SyncState tracks current sync operation state
+// SyncState tracks current sync operation state.
+// All fields are safe for concurrent read via mutex protection.
 type SyncState struct {
 	Running     bool      `json:"running"`
 	StartedAt   time.Time `json:"startedAt,omitempty"`
@@ -40,7 +52,8 @@ type SyncState struct {
 	TableIndex  int       `json:"tableIndex"`
 }
 
-// ProgressMessage is sent via WebSocket to update clients
+// ProgressMessage is sent via WebSocket to update clients.
+// Type must be one of: "progress", "log", "complete", "error".
 type ProgressMessage struct {
 	Type        string     `json:"type"` // "progress", "log", "complete", "error"
 	Message     string     `json:"message,omitempty"`
@@ -53,14 +66,14 @@ type ProgressMessage struct {
 	Timestamp   time.Time  `json:"timestamp"`
 }
 
-// SyncStats contains sync statistics
+// SyncStats contains sync statistics.
 type SyncStats struct {
 	TotalUpserts int64            `json:"totalUpserts"`
 	TotalDeletes int64            `json:"totalDeletes"`
 	TableStats   map[string]int64 `json:"tableStats,omitempty"`
 }
 
-// Config holds server configuration
+// Config holds server configuration.
 type Config struct {
 	Port     int
 	SourceDB string
@@ -68,8 +81,13 @@ type Config struct {
 	Schema   string
 }
 
-// New creates a new Server instance
+// New creates a new Server instance.
+// Config must not be nil.
 func New(cfg *Config) *Server {
+	if cfg == nil {
+		panic("server.New: config is nil")
+	}
+
 	return &Server{
 		port:     cfg.Port,
 		sourceDB: cfg.SourceDB,
@@ -77,30 +95,42 @@ func New(cfg *Config) *Server {
 		schema:   cfg.Schema,
 		clients:  make(map[*websocket.Conn]bool),
 		upgrader: websocket.Upgrader{
-			CheckOrigin: func(r *http.Request) bool {
-				// Allow same-origin requests (when Origin header matches Host)
-				origin := r.Header.Get("Origin")
-				if origin == "" {
-					return true // No origin header (e.g., non-browser clients)
-				}
-				// For local development, allow localhost on any port
-				host := r.Host
-				localhostPattern := regexp.MustCompile(`^https?://(localhost|127\.0\.0\.1)(:\d+)?$`)
-				if localhostPattern.MatchString(origin) && (host == "localhost" || host == "127.0.0.1" ||
-					regexp.MustCompile(`^(localhost|127\.0\.0\.1)(:\d+)?$`).MatchString(host)) {
-					return true
-				}
-				// Allow if origin matches the host
-				return origin == "http://"+host || origin == "https://"+host
-			},
+			CheckOrigin: checkWebSocketOrigin,
 		},
 		syncState: &SyncState{},
 		logger:    slog.Default(),
 	}
 }
 
-// Start runs the HTTP server
+// checkWebSocketOrigin validates WebSocket upgrade requests.
+// Allows same-origin requests and localhost for development.
+func checkWebSocketOrigin(r *http.Request) bool {
+	origin := r.Header.Get("Origin")
+	if origin == "" {
+		return true // No origin header (e.g., non-browser clients)
+	}
+
+	// For local development, allow localhost on any port
+	host := r.Host
+	localhostPattern := regexp.MustCompile(`^https?://(localhost|127\.0\.0\.1)(:\d+)?$`)
+	hostPattern := regexp.MustCompile(`^(localhost|127\.0\.0\.1)(:\d+)?$`)
+
+	if localhostPattern.MatchString(origin) && (host == "localhost" || host == "127.0.0.1" || hostPattern.MatchString(host)) {
+		return true
+	}
+
+	// Allow if origin matches the host
+	return origin == "http://"+host || origin == "https://"+host
+}
+
+// Start runs the HTTP server.
+// Blocks until context is cancelled or an error occurs.
+// Returns nil on clean shutdown.
 func (s *Server) Start(ctx context.Context) error {
+	if s == nil {
+		return fmt.Errorf("server is nil")
+	}
+
 	s.serverCtx = ctx
 	mux := http.NewServeMux()
 
@@ -144,10 +174,10 @@ func (s *Server) Start(ctx context.Context) error {
 	server := &http.Server{
 		Addr:              addr,
 		Handler:           corsMiddleware(mux),
-		ReadTimeout:       30 * time.Second,
-		ReadHeaderTimeout: 10 * time.Second,
-		WriteTimeout:      60 * time.Second,
-		IdleTimeout:       120 * time.Second,
+		ReadTimeout:       serverReadTimeout,
+		ReadHeaderTimeout: serverReadHeaderTimeout,
+		WriteTimeout:      serverWriteTimeout,
+		IdleTimeout:       serverIdleTimeout,
 	}
 
 	s.logger.Info("Starting pgsync web server", "port", s.port, "url", fmt.Sprintf("http://localhost:%d", s.port))
@@ -155,9 +185,11 @@ func (s *Server) Start(ctx context.Context) error {
 	// Graceful shutdown
 	go func() {
 		<-ctx.Done()
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 		defer cancel()
-		_ = server.Shutdown(shutdownCtx)
+		if err := server.Shutdown(shutdownCtx); err != nil {
+			s.logger.Warn("Error during server shutdown", "error", err)
+		}
 	}()
 
 	if err := server.ListenAndServe(); err != http.ErrServerClosed {

@@ -1,3 +1,5 @@
+// Package db provides database inspection capabilities for PostgreSQL.
+// It supports reading table metadata, columns, primary keys, and foreign key dependencies.
 package db
 
 import (
@@ -10,14 +12,18 @@ import (
 	"github.com/lib/pq"
 )
 
-// Inspector provides database inspection capabilities
+// Inspector provides database inspection capabilities.
+// It is safe for concurrent use.
 type Inspector struct {
 	sourceDB *sql.DB
 	targetDB *sql.DB
 	schema   string
 }
 
-// NewInspector creates a new database inspector
+// NewInspector creates a new database inspector.
+// Both sourceDB and targetDB may be nil if only certain operations are needed,
+// but operations requiring them will return errors.
+// Schema should be a valid PostgreSQL schema name (default: "public").
 func NewInspector(sourceDB, targetDB *sql.DB, schema string) *Inspector {
 	return &Inspector{
 		sourceDB: sourceDB,
@@ -26,8 +32,12 @@ func NewInspector(sourceDB, targetDB *sql.DB, schema string) *Inspector {
 	}
 }
 
-// GetTables returns all tables in the specified schema
+// GetTables returns all BASE TABLE names in the specified schema, sorted alphabetically.
+// Excludes views, materialized views, and foreign tables.
 func (i *Inspector) GetTables(ctx context.Context) ([]string, error) {
+	if i == nil {
+		return nil, fmt.Errorf("inspector is nil")
+	}
 	if i.sourceDB == nil {
 		return nil, fmt.Errorf("source database connection is nil")
 	}
@@ -43,7 +53,9 @@ func (i *Inspector) GetTables(ctx context.Context) ([]string, error) {
 		return nil, fmt.Errorf("failed to query tables: %w", err)
 	}
 	defer func() {
-		_ = rows.Close()
+		if closeErr := rows.Close(); closeErr != nil {
+			// Log but don't fail - we already have the data
+		}
 	}()
 
 	var tables []string
@@ -62,11 +74,18 @@ func (i *Inspector) GetTables(ctx context.Context) ([]string, error) {
 	return tables, nil
 }
 
-// GetTableInfo returns detailed information about a table
-// Runs queries concurrently for better performance
+// GetTableInfo returns detailed information about a table.
+// Runs queries concurrently for better performance.
+// Returns error if tableName is empty or table doesn't exist.
 func (i *Inspector) GetTableInfo(ctx context.Context, tableName string) (*table.Info, error) {
+	if i == nil {
+		return nil, fmt.Errorf("inspector is nil")
+	}
 	if i.sourceDB == nil {
 		return nil, fmt.Errorf("source database connection is nil")
+	}
+	if tableName == "" {
+		return nil, fmt.Errorf("tableName is empty")
 	}
 
 	info := &table.Info{

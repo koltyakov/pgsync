@@ -1,18 +1,24 @@
+// Package table provides data structures for representing database table metadata.
 package table
 
 import "strings"
 
-// Info holds metadata about a database table
+// Info holds metadata about a database table.
+// This struct is used throughout the sync process to track table structure and state.
 type Info struct {
-	Name       string   // Table name
-	Schema     string   // Schema name
-	Columns    []string // Column names in order
-	PrimaryKey []string // Primary key column names
-	RowCount   int64    // Estimated row count
+	Name       string   // Table name (unqualified)
+	Schema     string   // Schema name (e.g., "public")
+	Columns    []string // Column names in order as they appear in the database
+	PrimaryKey []string // Primary key column names (may be empty for tables without PK)
+	RowCount   int64    // Estimated row count (may be from pg_stat or exact COUNT)
 }
 
-// HasColumn checks if the table has a specific column
+// HasColumn checks if the table has a specific column.
+// Comparison is case-insensitive to handle PostgreSQL's identifier normalization.
 func (t *Info) HasColumn(columnName string) bool {
+	if t == nil {
+		return false
+	}
 	for _, col := range t.Columns {
 		if strings.EqualFold(col, columnName) {
 			return true
@@ -21,9 +27,14 @@ func (t *Info) HasColumn(columnName string) bool {
 	return false
 }
 
-// EstimatedWork calculates a rough estimate of work required for this table
-// This is used for load balancing across workers
+// EstimatedWork calculates a rough estimate of work required for this table.
+// This is used for load balancing across workers when processing multiple tables.
+// Higher values indicate more work/complexity.
 func (t *Info) EstimatedWork() int64 {
+	if t == nil {
+		return 0
+	}
+
 	// Base work is row count
 	work := t.RowCount
 
@@ -38,8 +49,12 @@ func (t *Info) EstimatedWork() int64 {
 	return work
 }
 
-// FullName returns the fully qualified table name
+// FullName returns the fully qualified table name in "schema.table" format.
+// Returns empty string if Info is nil.
 func (t *Info) FullName() string {
+	if t == nil {
+		return ""
+	}
 	return t.Schema + "." + t.Name
 }
 

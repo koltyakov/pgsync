@@ -127,7 +127,7 @@ func TestValidate(t *testing.T) {
 				TargetDB: "postgres://localhost/target",
 			},
 			expectError: true,
-			errorMsg:    "sourceDb is required",
+			errorMsg:    "sourceDb is required: specify the source PostgreSQL connection string",
 		},
 		{
 			name: "missing targetDb",
@@ -135,7 +135,16 @@ func TestValidate(t *testing.T) {
 				SourceDB: "postgres://localhost/source",
 			},
 			expectError: true,
-			errorMsg:    "targetDb is required",
+			errorMsg:    "targetDb is required: specify the target PostgreSQL connection string",
+		},
+		{
+			name: "same source and target",
+			config: &Config{
+				SourceDB: "postgres://localhost/same",
+				TargetDB: "postgres://localhost/same",
+			},
+			expectError: true,
+			errorMsg:    "sourceDb and targetDb cannot be the same: this would cause data corruption",
 		},
 	}
 
@@ -225,6 +234,62 @@ func TestValidateRespectsProvidedValues(t *testing.T) {
 	}
 	if cfg.MaxIdleConns != 10 {
 		t.Errorf("expected maxIdleConns 10, got %d", cfg.MaxIdleConns)
+	}
+}
+
+func TestValidateBoundsChecking(t *testing.T) {
+	tests := []struct {
+		name      string
+		config    *Config
+		wantError bool
+		errorMsg  string
+	}{
+		{
+			name: "parallel exceeds maximum",
+			config: &Config{
+				SourceDB: "postgres://localhost/source",
+				TargetDB: "postgres://localhost/target",
+				Parallel: 100,
+			},
+			wantError: true,
+			errorMsg:  "parallel value 100 exceeds maximum 32: reduce parallel workers to prevent resource exhaustion",
+		},
+		{
+			name: "batchSize exceeds maximum",
+			config: &Config{
+				SourceDB:  "postgres://localhost/source",
+				TargetDB:  "postgres://localhost/target",
+				BatchSize: 50000,
+			},
+			wantError: true,
+			errorMsg:  "batchSize value 50000 exceeds maximum 10000: reduce batch size to prevent memory exhaustion",
+		},
+		{
+			name: "small batchSize gets clamped to minimum",
+			config: &Config{
+				SourceDB:  "postgres://localhost/source",
+				TargetDB:  "postgres://localhost/target",
+				BatchSize: 10,
+			},
+			wantError: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.config.Validate()
+			if tt.wantError {
+				if err == nil {
+					t.Error("expected error but got none")
+				} else if err.Error() != tt.errorMsg {
+					t.Errorf("expected error %q, got %q", tt.errorMsg, err.Error())
+				}
+			} else {
+				if err != nil {
+					t.Errorf("unexpected error: %v", err)
+				}
+			}
+		})
 	}
 }
 

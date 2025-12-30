@@ -28,8 +28,19 @@ type Syncer struct {
 	progress       ProgressHandler
 }
 
-// New creates a new Syncer instance
+// New creates a new Syncer instance.
+// The caller is responsible for calling Close() to release database connections.
 func New(cfg *config.Config) (*Syncer, error) {
+	// Defensive: validate config is not nil
+	if cfg == nil {
+		return nil, fmt.Errorf("configuration is nil: cannot create syncer without configuration")
+	}
+
+	// Ensure config is validated (applies defaults)
+	if err := cfg.Validate(); err != nil {
+		return nil, fmt.Errorf("invalid configuration: %w", err)
+	}
+
 	logger := slog.Default()
 
 	sourceDB, err := sql.Open("postgres", cfg.SourceDB)
@@ -99,8 +110,18 @@ func NewWithProgress(cfg *config.Config, progressHandler ProgressHandler) (*Sync
 	return syncer, nil
 }
 
-// GetStats returns current sync statistics
+// GetStats returns current sync statistics.
+// Safe to call concurrently from multiple goroutines.
+// Returns a copy of the stats to prevent data races.
 func (s *Syncer) GetStats() Stats {
+	if s == nil {
+		return Stats{
+			UpsertsByTable: make(map[string]int64),
+			DeletesByTable: make(map[string]int64),
+			SkippedTables:  []string{},
+		}
+	}
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -121,15 +142,25 @@ func copyMap(m map[string]int64) map[string]int64 {
 	return result
 }
 
-// Close closes all database connections
+// Close closes all database connections.
+// Safe to call multiple times; subsequent calls are no-ops.
+// Returns an error if any connection fails to close, but attempts to close all.
 func (s *Syncer) Close() error {
+	if s == nil {
+		return nil
+	}
+
 	var errs []string
 
-	if err := s.sourceDB.Close(); err != nil {
-		errs = append(errs, fmt.Sprintf("source DB: %v", err))
+	if s.sourceDB != nil {
+		if err := s.sourceDB.Close(); err != nil {
+			errs = append(errs, fmt.Sprintf("source DB: %v", err))
+		}
 	}
-	if err := s.targetDB.Close(); err != nil {
-		errs = append(errs, fmt.Sprintf("target DB: %v", err))
+	if s.targetDB != nil {
+		if err := s.targetDB.Close(); err != nil {
+			errs = append(errs, fmt.Sprintf("target DB: %v", err))
+		}
 	}
 
 	if len(errs) > 0 {
