@@ -154,29 +154,18 @@ func (i *Inspector) getPrimaryKey(ctx context.Context, tableName string) ([]stri
 	return primaryKey, nil
 }
 
-// getRowCount returns estimated row count for a table
+// getRowCount returns actual row count for a table
+// Uses COUNT(*) to get accurate results rather than estimates from pg_stat_user_tables
+// which can be stale and not reflect recent inserts/deletes
 func (i *Inspector) getRowCount(ctx context.Context, tableName string) (int64, error) {
-	query := `
-		SELECT COALESCE(n_tup_ins - n_tup_del, 0) as estimate
-		FROM pg_stat_user_tables 
-		WHERE schemaname = $1 AND relname = $2`
-
-	var count sql.NullInt64
-	err := i.sourceDB.QueryRowContext(ctx, query, i.schema, tableName).Scan(&count)
+	// Quote the table name to handle CamelCase names from .NET Entity Framework
+	countQuery := fmt.Sprintf("SELECT COUNT(*) FROM %s.\"%s\"", i.schema, tableName)
+	var count int64
+	err := i.sourceDB.QueryRowContext(ctx, countQuery).Scan(&count)
 	if err != nil {
-		// Fallback to actual count if stats are not available
-		// Quote the table name to handle CamelCase names from .NET Entity Framework
-		countQuery := fmt.Sprintf("SELECT COUNT(*) FROM %s.\"%s\"", i.schema, tableName)
-		err = i.sourceDB.QueryRowContext(ctx, countQuery).Scan(&count)
-		if err != nil {
-			return 0, err
-		}
+		return 0, err
 	}
-
-	if count.Valid {
-		return count.Int64, nil
-	}
-	return 0, nil
+	return count, nil
 }
 
 // TableDependency represents a foreign key dependency between tables

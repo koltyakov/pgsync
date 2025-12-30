@@ -60,6 +60,10 @@ func (s *Server) handleGetTables(w http.ResponseWriter, r *http.Request) {
 	inspector := db.NewInspector(sourceDB, nil, s.schema)
 	tables, err := inspector.GetTables(ctx)
 	if err != nil {
+		// Don't log context canceled as error - it's expected when client aborts request
+		if ctx.Err() != nil {
+			return
+		}
 		s.writeError(w, "Failed to get tables", err, http.StatusInternalServerError)
 		return
 	}
@@ -129,6 +133,10 @@ func (s *Server) handleGetTableInfo(w http.ResponseWriter, r *http.Request) {
 	// Get detailed column info from source
 	columns, err := s.getDetailedColumns(ctx, sourceDB, tableName)
 	if err != nil {
+		// Don't log context canceled as error - it's expected when client aborts request
+		if ctx.Err() != nil {
+			return
+		}
 		s.writeError(w, "Failed to get column details", err, http.StatusInternalServerError)
 		return
 	}
