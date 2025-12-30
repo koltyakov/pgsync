@@ -233,12 +233,12 @@ func TestLoadFromFileInvalidJSON(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create temp file: %v", err)
 	}
-	defer os.Remove(tmpFile.Name())
+	defer func() { _ = os.Remove(tmpFile.Name()) }()
 
 	if _, err := tmpFile.WriteString("{invalid json}"); err != nil {
 		t.Fatalf("Failed to write to temp file: %v", err)
 	}
-	tmpFile.Close()
+	_ = tmpFile.Close()
 
 	cfg := &Config{}
 	err = LoadFromFile(tmpFile.Name(), cfg)

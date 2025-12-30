@@ -47,9 +47,16 @@ function App() {
       .map(([name]) => name);
     
     const columns: { [table: string]: string[] } = {};
+    const partialSyncTables: string[] = [];
     for (const [tableName, sel] of Object.entries(selection)) {
       if (sel.selected && sel.columns.size > 0) {
         columns[tableName] = Array.from(sel.columns);
+        // Check if this is a partial sync
+        const tableInfo = tableInfoMap.get(tableName);
+        const syncableColumns = tableInfo?.columns.filter(c => c.existsInTarget) || [];
+        if (sel.columns.size < syncableColumns.length) {
+          partialSyncTables.push(`${tableName} (${sel.columns.size}/${syncableColumns.length} cols)`);
+        }
       }
     }
     
@@ -61,6 +68,9 @@ function App() {
     });
     
     if (success) {
+      if (partialSyncTables.length > 0) {
+        message.info(`Partial sync for: ${partialSyncTables.join(', ')}`, 5);
+      }
       message.success('Sync started');
     } else {
       message.error('Failed to start sync');

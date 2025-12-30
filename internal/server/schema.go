@@ -55,7 +55,7 @@ func (s *Server) handleGetTables(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, "Failed to connect to source database", err, http.StatusInternalServerError)
 		return
 	}
-	defer sourceDB.Close()
+	defer func() { _ = sourceDB.Close() }()
 
 	inspector := db.NewInspector(sourceDB, nil, s.schema)
 	tables, err := inspector.GetTables(ctx)
@@ -92,14 +92,14 @@ func (s *Server) handleGetTableInfo(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, "Failed to connect to source database", err, http.StatusInternalServerError)
 		return
 	}
-	defer sourceDB.Close()
+	defer func() { _ = sourceDB.Close() }()
 
 	targetDB, err := sql.Open("postgres", s.targetDB)
 	if err != nil {
 		s.writeError(w, "Failed to connect to target database", err, http.StatusInternalServerError)
 		return
 	}
-	defer targetDB.Close()
+	defer func() { _ = targetDB.Close() }()
 
 	sourceInspector := db.NewInspector(sourceDB, nil, s.schema)
 	info, err := sourceInspector.GetTableInfo(ctx, tableName)
@@ -193,7 +193,7 @@ func (s *Server) getDetailedColumns(ctx context.Context, db *sql.DB, tableName s
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var columns []ColumnInfo
 	for rows.Next() {
@@ -245,7 +245,7 @@ func (s *Server) getForeignKeyColumns(ctx context.Context, db *sql.DB, tableName
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	fkMap := make(map[string]string)
 	for rows.Next() {
@@ -271,7 +271,7 @@ func (s *Server) writeError(w http.ResponseWriter, message string, err error, st
 	s.logger.Error(message, "error", err)
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(map[string]string{
+	_ = json.NewEncoder(w).Encode(map[string]string{
 		"error":   message,
 		"details": err.Error(),
 	})

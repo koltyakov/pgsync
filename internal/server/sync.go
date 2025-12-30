@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/koltyakov/pgsync/internal/config"
@@ -149,7 +150,7 @@ func (s *Server) runSync(req SyncRequest) {
 		s.syncError(fmt.Errorf("failed to create syncer: %w", err))
 		return
 	}
-	defer syncer.Close()
+	defer func() { _ = syncer.Close() }()
 
 	// Run sync
 	ctx := context.Background()
@@ -230,6 +231,23 @@ func (h *webProgressHandler) OnTableStart(table string, index int) {
 		Progress:    progress,
 		Table:       table,
 		TableIndex:  index,
+		TotalTables: h.totalTables,
+	})
+}
+
+func (h *webProgressHandler) OnPartialSync(table string, syncingCols, ignoredCols []string, reason string) {
+	var colsInfo string
+	if len(ignoredCols) > 5 {
+		colsInfo = fmt.Sprintf("%d columns", len(ignoredCols))
+	} else {
+		colsInfo = strings.Join(ignoredCols, ", ")
+	}
+	h.server.broadcast(ProgressMessage{
+		Type:        "log",
+		Message:     fmt.Sprintf("Partial sync (%s): ignoring %s", reason, colsInfo),
+		Level:       "warn",
+		Table:       table,
+		TableIndex:  h.tableIndex,
 		TotalTables: h.totalTables,
 	})
 }

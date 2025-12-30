@@ -235,3 +235,49 @@ func (i *Inspector) GetTableDependencies(ctx context.Context) ([]TableDependency
 
 	return deps, nil
 }
+
+// TableExistsInTarget checks if a table exists in the target database
+func (i *Inspector) TableExistsInTarget(ctx context.Context, tableName string) (bool, error) {
+	if i.targetDB == nil {
+		return false, nil
+	}
+	query := `
+		SELECT EXISTS(
+			SELECT 1 FROM information_schema.tables 
+			WHERE table_schema = $1 AND table_name = $2 AND table_type = 'BASE TABLE'
+		)`
+	var exists bool
+	err := i.targetDB.QueryRowContext(ctx, query, i.schema, tableName).Scan(&exists)
+	if err != nil {
+		return false, fmt.Errorf("failed to check table existence: %w", err)
+	}
+	return exists, nil
+}
+
+// GetTargetColumns returns columns that exist in the target table
+func (i *Inspector) GetTargetColumns(ctx context.Context, tableName string) ([]string, error) {
+	if i.targetDB == nil {
+		return nil, nil
+	}
+	query := `
+		SELECT column_name 
+		FROM information_schema.columns 
+		WHERE table_schema = $1 AND table_name = $2 
+		ORDER BY ordinal_position`
+
+	rows, err := i.targetDB.QueryContext(ctx, query, i.schema, tableName)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query target columns: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var columns []string
+	for rows.Next() {
+		var col string
+		if err := rows.Scan(&col); err != nil {
+			return nil, fmt.Errorf("failed to scan column: %w", err)
+		}
+		columns = append(columns, col)
+	}
+	return columns, rows.Err()
+}

@@ -102,7 +102,7 @@ func (s *Server) Start(ctx context.Context) error {
 		s.logger.Warn("No embedded frontend found, serving API only", "error", err)
 		mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "text/html")
-			fmt.Fprint(w, `<!DOCTYPE html><html><head><title>pgsync</title></head><body>
+			_, _ = fmt.Fprint(w, `<!DOCTYPE html><html><head><title>pgsync</title></head><body>
 				<h1>pgsync Web UI</h1>
 				<p>Frontend not built. Build with:</p>
 				<pre>make web</pre>
@@ -171,7 +171,7 @@ func (s *Server) broadcast(msg ProgressMessage) {
 	for client := range s.clients {
 		if err := client.WriteJSON(msg); err != nil {
 			s.logger.Debug("Failed to write to websocket client", "error", err)
-			client.Close()
+			_ = client.Close()
 			delete(s.clients, client)
 		}
 	}
@@ -230,7 +230,7 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	state := *s.syncState
 	s.mu.Unlock()
 
-	conn.WriteJSON(ProgressMessage{
+	_ = conn.WriteJSON(ProgressMessage{
 		Type:     "status",
 		Progress: state.Progress,
 		Message:  state.CurrentStep,
@@ -241,7 +241,7 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 		s.mu.Lock()
 		delete(s.clients, conn)
 		s.mu.Unlock()
-		conn.Close()
+		_ = conn.Close()
 	}()
 
 	for {

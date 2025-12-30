@@ -53,7 +53,10 @@ export function SchemaTree({
 
       const children: DataNode[] = tableInfo?.columns.map((col: ColumnInfo) => {
         const colKey = `${tableName}.${col.name}`;
-        const isSelected = tableSelection?.columns.has(col.name) ?? true;
+        // Column is selected if: table is selected AND column is in the columns set
+        // When table is not selected, columns should appear grayed out
+        const tableIsSelected = tableSelection?.selected ?? false;
+        const isSelected = tableIsSelected && (tableSelection?.columns.has(col.name) ?? false);
         const colExistsInTarget = col.existsInTarget;
         const cannotSync = !tableExistsInTarget || !colExistsInTarget;
         
@@ -131,6 +134,13 @@ export function SchemaTree({
         }
       };
 
+      // Check if this is a partial sync (some columns deselected)
+      const syncableColumns = tableInfo?.columns.filter(c => c.existsInTarget) || [];
+      const selectedColumns = tableSelection?.columns || new Set<string>();
+      const isPartialSync = tableSelection?.selected && 
+        selectedColumns.size > 0 && 
+        selectedColumns.size < syncableColumns.length;
+
       return {
         key: tableName,
         title: (
@@ -143,6 +153,13 @@ export function SchemaTree({
               color: tableExistsInTarget ? undefined : '#ff4d4f',
               textDecoration: tableExistsInTarget ? 'none' : 'line-through',
             }}>{tableName}</span>
+            {isPartialSync && (
+              <Tooltip title={`Partial sync: ${selectedColumns.size} of ${syncableColumns.length} columns selected`}>
+                <Tag color="warning" style={{ fontSize: 10 }}>
+                  {selectedColumns.size}/{syncableColumns.length} cols
+                </Tag>
+              </Tooltip>
+            )}
             <span style={{ flexShrink: 0 }}>
               {tableInfo ? (
                 formatRowCount()
@@ -269,9 +286,10 @@ export function SchemaTree({
       const tableInfo = tableInfoMap.get(tableName);
       if (tableInfo) {
         const allColumns = tableInfo.columns.map(c => c.name);
+        // Not selected by default - columns set is empty (will be populated when table is checked)
         initialSelection[tableName] = {
           selected: false,
-          columns: new Set(allColumns),
+          columns: new Set<string>(),
           allColumns,
           primaryKeys: tableInfo.primaryKey,
         };

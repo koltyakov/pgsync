@@ -52,13 +52,58 @@ func (s *Syncer) Sync(ctx context.Context) error {
 	s.logger.Debug("Tables sorted by dependency order", "order", strings.Join(sortedTables, " -> "))
 
 	// Get table metadata for all tables (in sorted order)
+	// Also check target existence and filter columns
 	tableInfos := make([]*table.Info, 0, len(sortedTables))
 	for _, tableName := range sortedTables {
+		// Check if table exists in target
+		existsInTarget, err := s.inspector.TableExistsInTarget(ctx, tableName)
+		if err != nil {
+			s.logger.Warn("Failed to check target table existence", "table", tableName, "error", err)
+		}
+		if !existsInTarget {
+			s.logger.Warn("Table missing in target database, skipping", "table", tableName)
+			s.mu.Lock()
+			s.skippedTables = append(s.skippedTables, tableName)
+			s.mu.Unlock()
+			continue
+		}
+
 		info, err := s.inspector.GetTableInfo(ctx, tableName)
 		if err != nil {
 			s.logger.Warn("Failed to get table info", "table", tableName, "error", err)
 			continue
 		}
+
+		// Check which columns exist in target and filter
+		targetCols, err := s.inspector.GetTargetColumns(ctx, tableName)
+		if err != nil {
+			s.logger.Warn("Failed to get target columns", "table", tableName, "error", err)
+		} else if len(targetCols) > 0 {
+			targetColSet := make(map[string]bool)
+			for _, c := range targetCols {
+				targetColSet[c] = true
+			}
+			// Find missing columns
+			var missingCols []string
+			originalColCount := len(info.Columns)
+			for _, c := range info.Columns {
+				if !targetColSet[c] {
+					missingCols = append(missingCols, c)
+				}
+			}
+			if len(missingCols) > 0 {
+				s.logger.Warn("Columns missing in target, will be ignored",
+					"table", tableName,
+					"columns", strings.Join(missingCols, ", "))
+				// Filter to only columns that exist in target
+				info = info.FilterColumns(targetCols)
+				s.logger.Info("Partial table sync",
+					"table", tableName,
+					"columns", fmt.Sprintf("%d/%d", len(info.Columns), originalColCount),
+					"reason", "columns missing in target")
+			}
+		}
+
 		tableInfos = append(tableInfos, info)
 	}
 
@@ -184,29 +229,6 @@ func (s *Syncer) syncLevel(ctx context.Context, tableInfos []*table.Info) error 
 	return nil
 }
 
-// levelWorker processes table sync jobs for a single dependency level
-func (s *Syncer) levelWorker(ctx context.Context, workerID int, workChan <-chan *table.Info, errChan chan<- error) {
-	for {
-		select {
-		case info, ok := <-workChan:
-			if !ok {
-				return // Channel closed
-			}
-			// Filter columns if specified in config
-			tableInfo := info
-			if cols, ok := s.cfg.IncludeColumns[info.Name]; ok && len(cols) > 0 {
-				tableInfo = info.FilterColumns(cols)
-			}
-			if err := s.syncTable(ctx, tableInfo); err != nil {
-				s.logger.Error("Error syncing table", "table", tableInfo.Name, "error", err)
-				errChan <- fmt.Errorf("table %s: %w", tableInfo.Name, err)
-			}
-		case <-ctx.Done():
-			return // Context cancelled
-		}
-	}
-}
-
 // tableWork pairs table info with its index for progress reporting
 type tableWork struct {
 	info  *table.Info
@@ -223,9 +245,46 @@ func (s *Syncer) levelWorkerWithIndex(ctx context.Context, workerID int, workCha
 			}
 			// Filter columns if specified in config
 			tableInfo := work.info
+			originalColumns := work.info.Columns
+			originalColCount := len(originalColumns)
+
 			if cols, ok := s.cfg.IncludeColumns[work.info.Name]; ok && len(cols) > 0 {
 				tableInfo = work.info.FilterColumns(cols)
-				s.logger.Debug("Filtered columns for table", "table", work.info.Name, "columns", strings.Join(tableInfo.Columns, ", "))
+				if len(tableInfo.Columns) < originalColCount {
+					// Find ignored columns
+					syncingSet := make(map[string]bool)
+					for _, c := range tableInfo.Columns {
+						syncingSet[c] = true
+					}
+					var ignoredCols []string
+					for _, c := range originalColumns {
+						if !syncingSet[c] {
+							ignoredCols = append(ignoredCols, c)
+						}
+					}
+					s.logger.Info("Partial table sync (columns filtered by config)",
+						"table", work.info.Name,
+						"columns", fmt.Sprintf("%d/%d", len(tableInfo.Columns), originalColCount),
+						"syncing", strings.Join(tableInfo.Columns, ", "))
+					s.progress.OnPartialSync(work.info.Name, tableInfo.Columns, ignoredCols, "columns deselected")
+				}
+			} else if len(tableInfo.Columns) < originalColCount {
+				// Columns were filtered due to missing in target (done earlier in Sync)
+				// Find ignored columns
+				syncingSet := make(map[string]bool)
+				for _, c := range tableInfo.Columns {
+					syncingSet[c] = true
+				}
+				var ignoredCols []string
+				for _, c := range originalColumns {
+					if !syncingSet[c] {
+						ignoredCols = append(ignoredCols, c)
+					}
+				}
+				s.logger.Info("Partial table sync (columns missing in target)",
+					"table", work.info.Name,
+					"columns", fmt.Sprintf("%d/%d", len(tableInfo.Columns), originalColCount))
+				s.progress.OnPartialSync(work.info.Name, tableInfo.Columns, ignoredCols, "columns missing in target")
 			}
 
 			// Notify progress handler of table start

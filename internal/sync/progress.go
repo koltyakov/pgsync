@@ -8,6 +8,9 @@ type ProgressHandler interface {
 	// OnTableStart is called when starting to sync a table
 	OnTableStart(table string, index int)
 
+	// OnPartialSync is called when a table will sync only some columns
+	OnPartialSync(table string, syncingCols, ignoredCols []string, reason string)
+
 	// OnTableComplete is called when a table sync finishes
 	OnTableComplete(table string, upserts, deletes int64)
 
@@ -30,8 +33,10 @@ type Stats struct {
 // noopProgressHandler is used when no progress handler is provided
 type noopProgressHandler struct{}
 
-func (h *noopProgressHandler) OnStart(tables []string)                              {}
-func (h *noopProgressHandler) OnTableStart(table string, index int)                 {}
+func (h *noopProgressHandler) OnStart(tables []string)              {}
+func (h *noopProgressHandler) OnTableStart(table string, index int) {}
+func (h *noopProgressHandler) OnPartialSync(table string, syncingCols, ignoredCols []string, reason string) {
+}
 func (h *noopProgressHandler) OnTableComplete(table string, upserts, deletes int64) {}
 func (h *noopProgressHandler) OnLog(level, message string)                          {}
 func (h *noopProgressHandler) OnComplete(totalUpserts, totalDeletes int64)          {}

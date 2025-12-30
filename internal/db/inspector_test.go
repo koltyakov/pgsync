@@ -13,7 +13,7 @@ func TestGetTables(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create mock: %v", err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	inspector := NewInspector(db, db, "public")
 
@@ -95,7 +95,7 @@ func TestGetTableInfo(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create mock: %v", err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	inspector := NewInspector(db, db, "public")
 
@@ -153,7 +153,7 @@ func TestNewInspector(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create mock: %v", err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	inspector := NewInspector(db, db, "test_schema")
 
