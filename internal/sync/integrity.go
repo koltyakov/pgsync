@@ -11,17 +11,38 @@ import (
 	"github.com/koltyakov/pgsync/internal/table"
 )
 
-// writeIntegrityCSV writes integrity stats for each table into integrity.csv
+const integrityFileName = "integrity.csv"
+
+// writeIntegrityCSV writes integrity stats for each table into integrity.csv.
+// This provides a comprehensive post-sync verification report comparing
+// row counts, ID ranges, and timestamp ranges between source and target.
+//
+// Output file: integrity.csv in current working directory.
+// If file exists, it will be overwritten.
 func (s *Syncer) writeIntegrityCSV(ctx context.Context, tables []*table.Info) error {
-	// Create file in current working directory
-	f, err := os.Create("integrity.csv")
-	if err != nil {
-		return fmt.Errorf("failed to create integrity.csv: %w", err)
+	// Defensive: validate input
+	if tables == nil {
+		return fmt.Errorf("tables slice is nil")
 	}
-	defer func() { _ = f.Close() }()
+
+	// Create file in current working directory
+	f, err := os.Create(integrityFileName)
+	if err != nil {
+		return fmt.Errorf("failed to create %s: %w", integrityFileName, err)
+	}
+
+	// Ensure file is closed and synced even on error
+	var closeErr error
+	defer func() {
+		if syncErr := f.Sync(); syncErr != nil && closeErr == nil {
+			closeErr = fmt.Errorf("failed to sync %s: %w", integrityFileName, syncErr)
+		}
+		if err := f.Close(); err != nil && closeErr == nil {
+			closeErr = fmt.Errorf("failed to close %s: %w", integrityFileName, err)
+		}
+	}()
 
 	w := csv.NewWriter(f)
-	defer w.Flush()
 
 	// Header
 	header := []string{
@@ -37,19 +58,25 @@ func (s *Syncer) writeIntegrityCSV(ctx context.Context, tables []*table.Info) er
 	}
 
 	for _, info := range tables {
+		// Skip nil entries defensively
+		if info == nil {
+			s.logger.Warn("skipping nil table info in integrity check")
+			continue
+		}
+
 		// Check for context cancellation
-		if ctx.Err() != nil {
-			return ctx.Err()
+		if err := ctx.Err(); err != nil {
+			return fmt.Errorf("integrity check cancelled: %w", err)
 		}
 
 		// Row counts
 		srcRows, err := s.getExactRowCount(ctx, s.sourceDB, info.Name)
 		if err != nil {
-			return fmt.Errorf("%s: failed to get source row count: %w", info.Name, err)
+			return fmt.Errorf("table %q: failed to get source row count: %w", info.Name, err)
 		}
 		tgtRows, err := s.getExactRowCount(ctx, s.targetDB, info.Name)
 		if err != nil {
-			return fmt.Errorf("%s: failed to get target row count: %w", info.Name, err)
+			return fmt.Errorf("table %q: failed to get target row count: %w", info.Name, err)
 		}
 
 		// ID column min/max (best-effort: single-column PK or column named 'id')
@@ -57,51 +84,27 @@ func (s *Syncer) writeIntegrityCSV(ctx context.Context, tables []*table.Info) er
 		var idMinMatch, idMaxMatch string
 		if idCol, ok := s.findIDColumn(info); ok {
 			if srcMinID, srcMaxID, err = s.getMinMaxAsText(ctx, s.sourceDB, info.Name, idCol); err != nil {
-				return fmt.Errorf("%s: failed to get source id min/max: %w", info.Name, err)
+				return fmt.Errorf("table %q: failed to get source id min/max: %w", info.Name, err)
 			}
 			if tgtMinID, tgtMaxID, err = s.getMinMaxAsText(ctx, s.targetDB, info.Name, idCol); err != nil {
-				return fmt.Errorf("%s: failed to get target id min/max: %w", info.Name, err)
+				return fmt.Errorf("table %q: failed to get target id min/max: %w", info.Name, err)
 			}
-			if srcMinID != "" || tgtMinID != "" {
-				if srcMinID == tgtMinID {
-					idMinMatch = "Yes"
-				} else {
-					idMinMatch = "No"
-				}
-			}
-			if srcMaxID != "" || tgtMaxID != "" {
-				if srcMaxID == tgtMaxID {
-					idMaxMatch = "Yes"
-				} else {
-					idMaxMatch = "No"
-				}
-			}
+			idMinMatch = matchStatus(srcMinID, tgtMinID)
+			idMaxMatch = matchStatus(srcMaxID, tgtMaxID)
 		}
 
 		// Timestamp min/max if column exists
 		var srcMinTS, srcMaxTS, tgtMinTS, tgtMaxTS string
 		var tsMinMatch, tsMaxMatch string
-		if info.HasColumn(s.cfg.TimestampCol) && s.cfg.TimestampCol != "" {
+		if s.cfg.TimestampCol != "" && info.HasColumn(s.cfg.TimestampCol) {
 			if srcMinTS, srcMaxTS, err = s.getMinMaxAsText(ctx, s.sourceDB, info.Name, s.cfg.TimestampCol); err != nil {
-				return fmt.Errorf("%s: failed to get source ts min/max: %w", info.Name, err)
+				return fmt.Errorf("table %q: failed to get source ts min/max: %w", info.Name, err)
 			}
 			if tgtMinTS, tgtMaxTS, err = s.getMinMaxAsText(ctx, s.targetDB, info.Name, s.cfg.TimestampCol); err != nil {
-				return fmt.Errorf("%s: failed to get target ts min/max: %w", info.Name, err)
+				return fmt.Errorf("table %q: failed to get target ts min/max: %w", info.Name, err)
 			}
-			if srcMinTS != "" || tgtMinTS != "" {
-				if srcMinTS == tgtMinTS {
-					tsMinMatch = "Yes"
-				} else {
-					tsMinMatch = "No"
-				}
-			}
-			if srcMaxTS != "" || tgtMaxTS != "" {
-				if srcMaxTS == tgtMaxTS {
-					tsMaxMatch = "Yes"
-				} else {
-					tsMaxMatch = "No"
-				}
-			}
+			tsMinMatch = matchStatus(srcMinTS, tgtMinTS)
+			tsMaxMatch = matchStatus(srcMaxTS, tgtMaxTS)
 		}
 
 		rowsMatch := "No"
@@ -118,7 +121,7 @@ func (s *Syncer) writeIntegrityCSV(ctx context.Context, tables []*table.Info) er
 			srcMaxTS, tgtMaxTS, tsMaxMatch,
 		}
 		if err := w.Write(rec); err != nil {
-			return fmt.Errorf("failed to write record: %w", err)
+			return fmt.Errorf("failed to write record for table %q: %w", info.Name, err)
 		}
 	}
 
@@ -126,11 +129,29 @@ func (s *Syncer) writeIntegrityCSV(ctx context.Context, tables []*table.Info) er
 	if err := w.Error(); err != nil {
 		return fmt.Errorf("failed to flush csv writer: %w", err)
 	}
-	return nil
+
+	return closeErr
 }
 
-// getExactRowCount returns exact COUNT(*) from the given DB for a table
+// matchStatus returns "Yes", "No", or empty string based on whether values match.
+// Empty string is returned when both values are empty (no data to compare).
+func matchStatus(a, b string) string {
+	if a == "" && b == "" {
+		return ""
+	}
+	if a == b {
+		return "Yes"
+	}
+	return "No"
+}
+
+// getExactRowCount returns exact COUNT(*) from the given DB for a table.
+// This is more accurate than pg_stat estimates but slower for large tables.
 func (s *Syncer) getExactRowCount(ctx context.Context, dbh *sql.DB, tableName string) (int64, error) {
+	if dbh == nil {
+		return 0, fmt.Errorf("database connection is nil")
+	}
+
 	query := fmt.Sprintf("SELECT COUNT(*) FROM %s", s.quotedTableName(tableName))
 	var cnt int64
 	if err := dbh.QueryRowContext(ctx, query).Scan(&cnt); err != nil {
@@ -139,8 +160,13 @@ func (s *Syncer) getExactRowCount(ctx context.Context, dbh *sql.DB, tableName st
 	return cnt, nil
 }
 
-// getMinMaxAsText returns MIN and MAX for a column, cast to text for CSV friendliness
+// getMinMaxAsText returns MIN and MAX for a column, cast to text for CSV friendliness.
+// Returns empty strings for NULL values (empty table or all-NULL column).
 func (s *Syncer) getMinMaxAsText(ctx context.Context, dbh *sql.DB, tableName, column string) (string, string, error) {
+	if dbh == nil {
+		return "", "", fmt.Errorf("database connection is nil")
+	}
+
 	query := fmt.Sprintf("SELECT MIN((%s)::text), MAX((%s)::text) FROM %s",
 		s.quotedColumnName(column), s.quotedColumnName(column), s.quotedTableName(tableName))
 	var minVal, maxVal sql.NullString
@@ -157,8 +183,13 @@ func (s *Syncer) getMinMaxAsText(ctx context.Context, dbh *sql.DB, tableName, co
 	return minStr, maxStr, nil
 }
 
-// findIDColumn determines the best ID column to use for min/max
+// findIDColumn determines the best ID column to use for min/max analysis.
+// Priority: single-column primary key > column named "id".
+// Returns (column, true) if found, ("", false) otherwise.
 func (s *Syncer) findIDColumn(info *table.Info) (string, bool) {
+	if info == nil {
+		return "", false
+	}
 	if len(info.PrimaryKey) == 1 {
 		return info.PrimaryKey[0], true
 	}

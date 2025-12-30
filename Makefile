@@ -1,4 +1,4 @@
-.PHONY: build clean test install deps lint fmt vet
+.PHONY: build clean test install deps lint fmt vet web web-dev server
 
 # Binary name
 BINARY_NAME=pgsync
@@ -14,11 +14,19 @@ GOMOD=$(GOCMD) mod
 GOFMT=gofmt
 GOVET=$(GOCMD) vet
 
+# Web parameters
+WEB_DIR=./web
+NPM=npm
+
+# E2E database connections
+SOURCE_DB=postgres://postgres:postgres@localhost:5433/crm_source?sslmode=disable
+TARGET_DB=postgres://postgres:postgres@localhost:5434/crm_target?sslmode=disable
+
 # Build flags
 LDFLAGS=-ldflags "-s -w"
 BUILD_FLAGS=-trimpath $(LDFLAGS)
 
-all: deps fmt vet test build
+all: deps fmt vet test web build
 
 build:
 	@echo "Building $(BINARY_NAME)..."
@@ -47,7 +55,38 @@ clean:
 	@echo "Cleaning..."
 	$(GOCLEAN)
 	@rm -rf $(BUILD_DIR)
+	@rm -rf $(WEB_DIR)/dist
+	@rm -rf $(WEB_DIR)/node_modules
 	@rm -f *.db
+
+# Web UI targets
+web: web-deps web-build
+
+web-deps:
+	@echo "Installing web dependencies..."
+	@cd $(WEB_DIR) && $(NPM) install
+
+web-build: web-deps
+	@echo "Building web UI..."
+	@cd $(WEB_DIR) && $(NPM) run build
+
+web-dev:
+	@echo "Starting web dev server..."
+	@cd $(WEB_DIR) && $(NPM) run dev
+
+# Server mode (requires web build)
+server: web build
+	@echo "Starting pgsync server..."
+	$(BUILD_DIR)/$(BINARY_NAME) -server \
+		-source "$(SOURCE_DB)" \
+		-target "$(TARGET_DB)"
+
+server-dev:
+	@echo "Starting pgsync server (dev mode, no web build)..."
+	$(GOBUILD) -o $(BUILD_DIR)/$(BINARY_NAME) . && \
+	$(BUILD_DIR)/$(BINARY_NAME) -server \
+		-source "$(SOURCE_DB)" \
+		-target "$(TARGET_DB)"
 
 test:
 	@echo "Running tests..."
@@ -98,4 +137,8 @@ help:
 	@echo "  lint         - Run linter"
 	@echo "  vet          - Run go vet"
 	@echo "  install      - Install binary to GOPATH"
+	@echo "  web          - Build web UI"
+	@echo "  web-dev      - Start web dev server"
+	@echo "  server       - Build and start server with web UI"
+	@echo "  server-dev   - Start server without rebuilding web UI"
 

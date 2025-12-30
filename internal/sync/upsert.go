@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/koltyakov/pgsync/internal/table"
+	"github.com/lib/pq"
 )
 
 // BulkBatchSize defines the number of rows per bulk INSERT statement
@@ -187,13 +188,15 @@ func (s *Syncer) createPKString(values []any) string {
 }
 
 // quotedTableName returns a properly quoted table name for PostgreSQL
+// Uses pq.QuoteIdentifier to prevent SQL injection
 func (s *Syncer) quotedTableName(tableName string) string {
-	return fmt.Sprintf("%s.\"%s\"", s.cfg.Schema, tableName)
+	return pq.QuoteIdentifier(s.cfg.Schema) + "." + pq.QuoteIdentifier(tableName)
 }
 
 // quotedColumnName returns a properly quoted column name for PostgreSQL
+// Uses pq.QuoteIdentifier to prevent SQL injection
 func (s *Syncer) quotedColumnName(columnName string) string {
-	return fmt.Sprintf("\"%s\"", columnName)
+	return pq.QuoteIdentifier(columnName)
 }
 
 // quotedColumnsList returns a comma-separated list of quoted column names

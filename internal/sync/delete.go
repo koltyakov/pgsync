@@ -12,6 +12,9 @@ import (
 
 // handleDeletedRows identifies and removes deleted rows from target
 func (s *Syncer) handleDeletedRows(ctx context.Context, tableInfo *table.Info) error {
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
 	if len(tableInfo.PrimaryKey) == 0 {
 		s.logger.Debug("Table has no primary key, skipping deleted rows handling", "table", tableInfo.Name)
 		return nil
@@ -27,7 +30,7 @@ func (s *Syncer) handleDeletedRows(ctx context.Context, tableInfo *table.Info) e
 	}
 	defer func() { _ = sourceRows.Close() }()
 
-	sourcePKs := make(map[string]bool)
+	sourcePKs := make(map[string]struct{})
 	for sourceRows.Next() {
 		values := make([]any, len(tableInfo.PrimaryKey))
 		scanArgs := make([]any, len(tableInfo.PrimaryKey))
@@ -40,7 +43,7 @@ func (s *Syncer) handleDeletedRows(ctx context.Context, tableInfo *table.Info) e
 		}
 
 		pkStr := s.createPKString(values)
-		sourcePKs[pkStr] = true
+		sourcePKs[pkStr] = struct{}{}
 	}
 
 	if err := sourceRows.Err(); err != nil {
@@ -68,7 +71,7 @@ func (s *Syncer) handleDeletedRows(ctx context.Context, tableInfo *table.Info) e
 		}
 
 		pkStr := s.createPKString(values)
-		if !sourcePKs[pkStr] {
+		if _, exists := sourcePKs[pkStr]; !exists {
 			toDelete = append(toDelete, values)
 			// Chunked deletion using batch size to avoid large statements
 			if s.cfg.BatchSize > 0 && len(toDelete) >= s.cfg.BatchSize {
@@ -274,6 +277,9 @@ func (s *Syncer) bulkDeleteCompositePK(ctx context.Context, tx *sql.Tx, tableInf
 // handleMissingRows identifies and inserts rows that exist in source but not in target
 // This handles the case where new rows were inserted with timestamps older than the max
 func (s *Syncer) handleMissingRows(ctx context.Context, tableInfo *table.Info) error {
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
 	if len(tableInfo.PrimaryKey) == 0 {
 		s.logger.Debug("Table has no primary key, skipping missing rows handling", "table", tableInfo.Name)
 		return nil
@@ -289,7 +295,7 @@ func (s *Syncer) handleMissingRows(ctx context.Context, tableInfo *table.Info) e
 	}
 	defer func() { _ = targetRows.Close() }()
 
-	targetPKs := make(map[string]bool)
+	targetPKs := make(map[string]struct{})
 	for targetRows.Next() {
 		values := make([]any, len(tableInfo.PrimaryKey))
 		scanArgs := make([]any, len(tableInfo.PrimaryKey))
@@ -302,7 +308,7 @@ func (s *Syncer) handleMissingRows(ctx context.Context, tableInfo *table.Info) e
 		}
 
 		pkStr := s.createPKString(values)
-		targetPKs[pkStr] = true
+		targetPKs[pkStr] = struct{}{}
 	}
 
 	if err := targetRows.Err(); err != nil {
@@ -330,7 +336,7 @@ func (s *Syncer) handleMissingRows(ctx context.Context, tableInfo *table.Info) e
 		}
 
 		pkStr := s.createPKString(values)
-		if !targetPKs[pkStr] {
+		if _, exists := targetPKs[pkStr]; !exists {
 			missingPKs = append(missingPKs, values)
 		}
 	}

@@ -13,7 +13,7 @@ func TestGetTables(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create mock: %v", err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	inspector := NewInspector(db, db, "public")
 
@@ -95,11 +95,15 @@ func TestGetTableInfo(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create mock: %v", err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
+
+	// Enable MatchExpectationsInOrder(false) to handle concurrent queries
+	mock.MatchExpectationsInOrder(false)
 
 	inspector := NewInspector(db, db, "public")
 
 	t.Run("returns complete table info", func(t *testing.T) {
+		// Note: GetTableInfo runs queries concurrently, so we use AnyOrder mode
 		// Mock columns query
 		colRows := sqlmock.NewRows([]string{"column_name"}).
 			AddRow("id").
@@ -109,17 +113,16 @@ func TestGetTableInfo(t *testing.T) {
 			WithArgs("public", "users").
 			WillReturnRows(colRows)
 
-		// Mock primary key query
+		// Mock primary key query - pq.QuoteIdentifier quotes both schema and table
 		pkRows := sqlmock.NewRows([]string{"attname"}).
 			AddRow("id")
 		mock.ExpectQuery("SELECT a.attname FROM pg_index").
-			WithArgs("public.\"users\"").
+			WithArgs(`"public"."users"`).
 			WillReturnRows(pkRows)
 
-		// Mock row count query
-		mock.ExpectQuery("SELECT COALESCE").
-			WithArgs("public", "users").
-			WillReturnRows(sqlmock.NewRows([]string{"estimate"}).AddRow(1000))
+		// Mock row count query - now uses COUNT(*)
+		mock.ExpectQuery(`SELECT COUNT\(\*\) FROM "public"\."users"`).
+			WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(1000))
 
 		info, err := inspector.GetTableInfo(context.Background(), "users")
 		if err != nil {
@@ -153,7 +156,7 @@ func TestNewInspector(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create mock: %v", err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	inspector := NewInspector(db, db, "test_schema")
 

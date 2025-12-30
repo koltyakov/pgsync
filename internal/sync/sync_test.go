@@ -126,7 +126,7 @@ func TestBuildUpsertQuery(t *testing.T) {
 				PrimaryKey: []string{"id"},
 			},
 			contains: []string{
-				"INSERT INTO public.\"users\"",
+				"INSERT INTO \"public\".\"users\"",
 				"\"id\", \"name\", \"email\"",
 				"$1, $2, $3",
 				"ON CONFLICT (\"id\")",
@@ -143,7 +143,7 @@ func TestBuildUpsertQuery(t *testing.T) {
 				PrimaryKey: []string{"order_id", "item_id"},
 			},
 			contains: []string{
-				"INSERT INTO public.\"order_items\"",
+				"INSERT INTO \"public\".\"order_items\"",
 				"ON CONFLICT (\"order_id\", \"item_id\")",
 				"\"quantity\" = EXCLUDED.\"quantity\"",
 				"\"price\" = EXCLUDED.\"price\"",
@@ -236,7 +236,8 @@ func TestQuotedTableName(t *testing.T) {
 	}
 
 	result := syncer.quotedTableName("MyTable")
-	expected := "myschema.\"MyTable\""
+	// pq.QuoteIdentifier quotes both schema and table name
+	expected := "\"myschema\".\"MyTable\""
 	if result != expected {
 		t.Errorf("expected %q, got %q", expected, result)
 	}
@@ -446,9 +447,9 @@ func TestTopologicalSort(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			tableSet := make(map[string]bool)
+			tableSet := make(map[string]struct{})
 			for _, t := range tt.tables {
-				tableSet[t] = true
+				tableSet[t] = struct{}{}
 			}
 			result := topologicalSort(tt.tables, tt.deps, tableSet)
 			if !tt.validate(result) {
@@ -504,9 +505,9 @@ func TestGroupByDependencyLevel(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			tableSet := make(map[string]bool)
+			tableSet := make(map[string]struct{})
 			for _, info := range tt.tables {
-				tableSet[info.Name] = true
+				tableSet[info.Name] = struct{}{}
 			}
 			levels := groupByDependencyLevel(tt.tables, tt.deps, tableSet)
 			if len(levels) != tt.expectedLevels {

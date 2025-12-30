@@ -2,6 +2,8 @@
 
 Lightweight, reliable data synchronization for PostgreSQL. pgsync focuses on data-only sync between two Postgres databases using timestamp-based incremental updates, safe upserts, and optional table filtering.
 
+![Web UI](./assets/web-ui.jpg)
+
 ## Why this tool
 
 - Simple: data-only sync, no schema changes.
@@ -129,6 +131,15 @@ Use reconcile mode when:
 - You want periodic full reconciliation as a safety net
 
 **Note:** Reconcile mode loads all primary keys into memory. For very large tables (100M+ rows), consider using table filters to reconcile in batches.
+
+## Web UI Mode
+
+pgsync includes a built-in web interface for interactive sync operations with real-time progress, table/column selection, and schema visualization.
+
+```bash
+./pgsync -source "..." -target "..." -server
+# Open http://localhost:8080
+```
 
 ## How it works (brief)
 

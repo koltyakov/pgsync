@@ -29,6 +29,9 @@ func (s *Syncer) Sync(ctx context.Context) error {
 		return nil
 	}
 
+	// Notify progress handler of start
+	s.progress.OnStart(tables)
+
 	s.logger.Debug("Found tables to sync", "count", len(tables), "tables", strings.Join(tables, ", "))
 
 	// Get FK dependencies for topological sort
@@ -39,9 +42,9 @@ func (s *Syncer) Sync(ctx context.Context) error {
 	}
 
 	// Build a set of tables we're syncing (for filtering deps)
-	tableSet := make(map[string]bool)
+	tableSet := make(map[string]struct{})
 	for _, t := range tables {
-		tableSet[t] = true
+		tableSet[t] = struct{}{}
 	}
 
 	// Sort tables by dependency order (parents first, then children)
@@ -49,13 +52,58 @@ func (s *Syncer) Sync(ctx context.Context) error {
 	s.logger.Debug("Tables sorted by dependency order", "order", strings.Join(sortedTables, " -> "))
 
 	// Get table metadata for all tables (in sorted order)
+	// Also check target existence and filter columns
 	tableInfos := make([]*table.Info, 0, len(sortedTables))
 	for _, tableName := range sortedTables {
+		// Check if table exists in target
+		existsInTarget, err := s.inspector.TableExistsInTarget(ctx, tableName)
+		if err != nil {
+			s.logger.Warn("Failed to check target table existence", "table", tableName, "error", err)
+		}
+		if !existsInTarget {
+			s.logger.Warn("Table missing in target database, skipping", "table", tableName)
+			s.mu.Lock()
+			s.skippedTables = append(s.skippedTables, tableName)
+			s.mu.Unlock()
+			continue
+		}
+
 		info, err := s.inspector.GetTableInfo(ctx, tableName)
 		if err != nil {
 			s.logger.Warn("Failed to get table info", "table", tableName, "error", err)
 			continue
 		}
+
+		// Check which columns exist in target and filter
+		targetCols, err := s.inspector.GetTargetColumns(ctx, tableName)
+		if err != nil {
+			s.logger.Warn("Failed to get target columns", "table", tableName, "error", err)
+		} else if len(targetCols) > 0 {
+			targetColSet := make(map[string]bool)
+			for _, c := range targetCols {
+				targetColSet[c] = true
+			}
+			// Find missing columns
+			var missingCols []string
+			originalColCount := len(info.Columns)
+			for _, c := range info.Columns {
+				if !targetColSet[c] {
+					missingCols = append(missingCols, c)
+				}
+			}
+			if len(missingCols) > 0 {
+				s.logger.Warn("Columns missing in target, will be ignored",
+					"table", tableName,
+					"columns", strings.Join(missingCols, ", "))
+				// Filter to only columns that exist in target
+				info = info.FilterColumns(targetCols)
+				s.logger.Info("Partial table sync",
+					"table", tableName,
+					"columns", fmt.Sprintf("%d/%d", len(info.Columns), originalColCount),
+					"reason", "columns missing in target")
+			}
+		}
+
 		tableInfos = append(tableInfos, info)
 	}
 
@@ -105,6 +153,9 @@ func (s *Syncer) Sync(ctx context.Context) error {
 		"deleted", totalDeletes,
 	)
 
+	// Notify progress handler of completion
+	s.progress.OnComplete(totalUpserts, totalDeletes)
+
 	// Log skipped tables if any
 	s.mu.Lock()
 	skipped := append([]string(nil), s.skippedTables...)
@@ -136,7 +187,7 @@ func (s *Syncer) syncLevel(ctx context.Context, tableInfos []*table.Info) error 
 		numWorkers = len(tableInfos)
 	}
 
-	workChan := make(chan *table.Info, len(tableInfos))
+	workChan := make(chan tableWork, len(tableInfos))
 	errChan := make(chan error, len(tableInfos))
 	var wg gosync.WaitGroup
 
@@ -145,14 +196,14 @@ func (s *Syncer) syncLevel(ctx context.Context, tableInfos []*table.Info) error 
 		wg.Add(1)
 		go func(workerID int) {
 			defer wg.Done()
-			s.levelWorker(ctx, workerID, workChan, errChan)
+			s.levelWorkerWithIndex(ctx, workerID, workChan, errChan)
 		}(i)
 	}
 
-	// Send work to workers
-	for _, info := range tableInfos {
+	// Send work to workers with index for progress tracking
+	for i, info := range tableInfos {
 		select {
-		case workChan <- info:
+		case workChan <- tableWork{info: info, index: i}:
 		case <-ctx.Done():
 			close(workChan)
 			wg.Wait()
@@ -178,14 +229,47 @@ func (s *Syncer) syncLevel(ctx context.Context, tableInfos []*table.Info) error 
 	return nil
 }
 
-// levelWorker processes table sync jobs for a single dependency level
-func (s *Syncer) levelWorker(ctx context.Context, workerID int, workChan <-chan *table.Info, errChan chan<- error) {
+// tableWork pairs table info with its index for progress reporting
+type tableWork struct {
+	info  *table.Info
+	index int
+}
+
+// levelWorkerWithIndex processes table sync jobs with progress reporting
+func (s *Syncer) levelWorkerWithIndex(ctx context.Context, workerID int, workChan <-chan tableWork, errChan chan<- error) {
 	for {
 		select {
-		case tableInfo, ok := <-workChan:
+		case work, ok := <-workChan:
 			if !ok {
 				return // Channel closed
 			}
+			// Filter columns if specified in config
+			tableInfo := work.info
+			originalColumns := work.info.Columns
+			originalColCount := len(originalColumns)
+
+			if cols, ok := s.cfg.IncludeColumns[work.info.Name]; ok && len(cols) > 0 {
+				tableInfo = work.info.FilterColumns(cols)
+				if len(tableInfo.Columns) < originalColCount {
+					ignoredCols := findIgnoredColumns(originalColumns, tableInfo.Columns)
+					s.logger.Info("Partial table sync (columns filtered by config)",
+						"table", work.info.Name,
+						"columns", fmt.Sprintf("%d/%d", len(tableInfo.Columns), originalColCount),
+						"syncing", strings.Join(tableInfo.Columns, ", "))
+					s.progress.OnPartialSync(work.info.Name, tableInfo.Columns, ignoredCols, "columns deselected")
+				}
+			} else if len(tableInfo.Columns) < originalColCount {
+				// Columns were filtered due to missing in target (done earlier in Sync)
+				ignoredCols := findIgnoredColumns(originalColumns, tableInfo.Columns)
+				s.logger.Info("Partial table sync (columns missing in target)",
+					"table", work.info.Name,
+					"columns", fmt.Sprintf("%d/%d", len(tableInfo.Columns), originalColCount))
+				s.progress.OnPartialSync(work.info.Name, tableInfo.Columns, ignoredCols, "columns missing in target")
+			}
+
+			// Notify progress handler of table start
+			s.progress.OnTableStart(tableInfo.Name, work.index)
+
 			if err := s.syncTable(ctx, tableInfo); err != nil {
 				s.logger.Error("Error syncing table", "table", tableInfo.Name, "error", err)
 				errChan <- fmt.Errorf("table %s: %w", tableInfo.Name, err)
@@ -196,8 +280,23 @@ func (s *Syncer) levelWorker(ctx context.Context, workerID int, workChan <-chan 
 	}
 }
 
+// findIgnoredColumns returns columns from original that are not in syncing
+func findIgnoredColumns(original, syncing []string) []string {
+	syncingSet := make(map[string]struct{}, len(syncing))
+	for _, c := range syncing {
+		syncingSet[c] = struct{}{}
+	}
+	var ignored []string
+	for _, c := range original {
+		if _, exists := syncingSet[c]; !exists {
+			ignored = append(ignored, c)
+		}
+	}
+	return ignored
+}
+
 // topologicalSort sorts tables so that parent tables come before children (FK dependencies)
-func topologicalSort(tables []string, deps []db.TableDependency, tableSet map[string]bool) []string {
+func topologicalSort(tables []string, deps []db.TableDependency, tableSet map[string]struct{}) []string {
 	if len(deps) == 0 {
 		return tables
 	}
@@ -206,7 +305,9 @@ func topologicalSort(tables []string, deps []db.TableDependency, tableSet map[st
 	dependsOn := make(map[string][]string)
 	for _, dep := range deps {
 		// Only consider dependencies where both tables are in our sync set
-		if tableSet[dep.Table] && tableSet[dep.DependsOn] {
+		_, tableInSet := tableSet[dep.Table]
+		_, dependsOnInSet := tableSet[dep.DependsOn]
+		if tableInSet && dependsOnInSet {
 			dependsOn[dep.Table] = append(dependsOn[dep.Table], dep.DependsOn)
 		}
 	}
@@ -273,20 +374,22 @@ func topologicalSort(tables []string, deps []db.TableDependency, tableSet map[st
 
 // groupByDependencyLevel groups tables into levels where tables in the same level
 // have no dependencies on each other and can be synced in parallel
-func groupByDependencyLevel(tableInfos []*table.Info, deps []db.TableDependency, tableSet map[string]bool) [][]*table.Info {
+func groupByDependencyLevel(tableInfos []*table.Info, deps []db.TableDependency, tableSet map[string]struct{}) [][]*table.Info {
 	if len(deps) == 0 || len(tableInfos) == 0 {
 		// No dependencies - all tables can be synced in parallel
 		return [][]*table.Info{tableInfos}
 	}
 
 	// Build dependency map
-	dependsOn := make(map[string]map[string]bool)
+	dependsOn := make(map[string]map[string]struct{})
 	for _, dep := range deps {
-		if tableSet[dep.Table] && tableSet[dep.DependsOn] {
+		_, tableInSet := tableSet[dep.Table]
+		_, dependsOnInSet := tableSet[dep.DependsOn]
+		if tableInSet && dependsOnInSet {
 			if dependsOn[dep.Table] == nil {
-				dependsOn[dep.Table] = make(map[string]bool)
+				dependsOn[dep.Table] = make(map[string]struct{})
 			}
-			dependsOn[dep.Table][dep.DependsOn] = true
+			dependsOn[dep.Table][dep.DependsOn] = struct{}{}
 		}
 	}
 
@@ -306,7 +409,7 @@ func groupByDependencyLevel(tableInfos []*table.Info, deps []db.TableDependency,
 
 		maxDepLevel := -1
 		for dep := range dependsOn[tableName] {
-			if tableSet[dep] {
+			if _, exists := tableSet[dep]; exists {
 				depLevel := assignLevel(dep)
 				if depLevel > maxDepLevel {
 					maxDepLevel = depLevel

@@ -12,18 +12,19 @@ import (
 
 // Config holds the application configuration
 type Config struct {
-	SourceDB      string   `json:"sourceDb"`
-	TargetDB      string   `json:"targetDb"`
-	Schema        string   `json:"schema"`
-	IncludeTables []string `json:"includeTables"`
-	ExcludeTables []string `json:"excludeTables"`
-	TimestampCol  string   `json:"timestampColumn"`
-	Parallel      int      `json:"parallel"`
-	BatchSize     int      `json:"batchSize"`
-	Verbose       bool     `json:"verbose"`
-	Integrity     bool     `json:"integrity"`
-	DryRun        bool     `json:"dryRun"`
-	Reconcile     bool     `json:"reconcile"` // Force full comparison by primary key, ignore timestamps
+	SourceDB       string              `json:"sourceDb"`
+	TargetDB       string              `json:"targetDb"`
+	Schema         string              `json:"schema"`
+	IncludeTables  []string            `json:"includeTables"`
+	ExcludeTables  []string            `json:"excludeTables"`
+	IncludeColumns map[string][]string `json:"includeColumns"` // Table -> columns to sync (empty = all)
+	TimestampCol   string              `json:"timestampColumn"`
+	Parallel       int                 `json:"parallel"`
+	BatchSize      int                 `json:"batchSize"`
+	Verbose        bool                `json:"verbose"`
+	Integrity      bool                `json:"integrity"`
+	DryRun         bool                `json:"dryRun"`
+	Reconcile      bool                `json:"reconcile"` // Force full comparison by primary key, ignore timestamps
 
 	// Connection pool settings (optional, defaults are computed from Parallel)
 	MaxOpenConns    int           `json:"maxOpenConns,omitempty"`
@@ -32,12 +33,19 @@ type Config struct {
 }
 
 // Validate checks the configuration for errors and applies defaults.
+// Returns detailed error messages to help users fix configuration issues.
 func (c *Config) Validate() error {
+	// Required fields
 	if c.SourceDB == "" {
-		return errors.New("sourceDb is required")
+		return errors.New("sourceDb is required: specify the source PostgreSQL connection string")
 	}
 	if c.TargetDB == "" {
-		return errors.New("targetDb is required")
+		return errors.New("targetDb is required: specify the target PostgreSQL connection string")
+	}
+
+	// Prevent accidental self-sync which could cause data corruption
+	if c.SourceDB == c.TargetDB {
+		return errors.New("sourceDb and targetDb cannot be the same: this would cause data corruption")
 	}
 
 	// Apply defaults for missing values
@@ -47,11 +55,23 @@ func (c *Config) Validate() error {
 	if c.TimestampCol == "" {
 		c.TimestampCol = constants.DefaultTimestampColumn
 	}
+
+	// Validate and clamp Parallel to safe bounds
 	if c.Parallel <= 0 {
 		c.Parallel = constants.DefaultParallel
+	} else if c.Parallel > constants.MaxParallel {
+		return fmt.Errorf("parallel value %d exceeds maximum %d: reduce parallel workers to prevent resource exhaustion",
+			c.Parallel, constants.MaxParallel)
 	}
+
+	// Validate and clamp BatchSize to safe bounds
 	if c.BatchSize <= 0 {
 		c.BatchSize = constants.DefaultBatchSize
+	} else if c.BatchSize > constants.MaxBatchSize {
+		return fmt.Errorf("batchSize value %d exceeds maximum %d: reduce batch size to prevent memory exhaustion",
+			c.BatchSize, constants.MaxBatchSize)
+	} else if c.BatchSize < constants.MinBatchSize {
+		c.BatchSize = constants.MinBatchSize // Silently upgrade tiny batches
 	}
 
 	// Connection pool defaults (computed from Parallel if not explicitly set)
@@ -63,6 +83,18 @@ func (c *Config) Validate() error {
 	}
 	if c.ConnMaxLifetime <= 0 {
 		c.ConnMaxLifetime = constants.DefaultConnMaxLifetime
+	} else if c.ConnMaxLifetime > constants.MaxConnMaxLifetime {
+		c.ConnMaxLifetime = constants.MaxConnMaxLifetime
+	}
+
+	// Validate schema name length (PostgreSQL limit)
+	if len(c.Schema) > constants.MaxTableNameLength {
+		return fmt.Errorf("schema name exceeds PostgreSQL limit of %d characters", constants.MaxTableNameLength)
+	}
+
+	// Validate timestamp column name
+	if len(c.TimestampCol) > constants.MaxColumnNameLength {
+		return fmt.Errorf("timestamp column name exceeds PostgreSQL limit of %d characters", constants.MaxColumnNameLength)
 	}
 
 	return nil
