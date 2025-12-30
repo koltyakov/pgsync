@@ -25,6 +25,7 @@ type Syncer struct {
 	totalDeletes   int64
 	skippedTables  []string
 	logger         *slog.Logger
+	progress       ProgressHandler
 }
 
 // New creates a new Syncer instance
@@ -82,7 +83,42 @@ func New(cfg *config.Config) (*Syncer, error) {
 		deletesByTable: make(map[string]int64),
 		skippedTables:  make([]string, 0),
 		logger:         logger,
+		progress:       &noopProgressHandler{},
 	}, nil
+}
+
+// NewWithProgress creates a new Syncer instance with progress reporting
+func NewWithProgress(cfg *config.Config, progressHandler ProgressHandler) (*Syncer, error) {
+	syncer, err := New(cfg)
+	if err != nil {
+		return nil, err
+	}
+	if progressHandler != nil {
+		syncer.progress = progressHandler
+	}
+	return syncer, nil
+}
+
+// GetStats returns current sync statistics
+func (s *Syncer) GetStats() Stats {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	return Stats{
+		TotalUpserts:   s.totalUpserts,
+		TotalDeletes:   s.totalDeletes,
+		UpsertsByTable: copyMap(s.upsertsByTable),
+		DeletesByTable: copyMap(s.deletesByTable),
+		SkippedTables:  append([]string(nil), s.skippedTables...),
+	}
+}
+
+func copyMap(m map[string]int64) map[string]int64 {
+	result := make(map[string]int64, len(m))
+	for k, v := range m {
+		result[k] = v
+	}
+	return result
 }
 
 // Close closes all database connections

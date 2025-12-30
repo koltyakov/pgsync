@@ -12,6 +12,7 @@ import (
 
 	"github.com/koltyakov/pgsync/internal/config"
 	"github.com/koltyakov/pgsync/internal/constants"
+	"github.com/koltyakov/pgsync/internal/server"
 	"github.com/koltyakov/pgsync/internal/sync"
 )
 
@@ -39,6 +40,8 @@ func main() {
 		dryRun     = flag.Bool("dry-run", false, "Preview sync operations without making changes")
 		reconcile  = flag.Bool("reconcile", false, "Full reconciliation mode: compare all rows by primary key, sync missing/different rows")
 		configFile = flag.String("config", "", "Path to configuration file")
+		serverMode = flag.Bool("server", false, "Start web UI server instead of running sync")
+		serverPort = flag.Int("port", 8080, "Port for web UI server (only used with -server)")
 	)
 
 	flag.Parse()
@@ -68,6 +71,32 @@ func main() {
 			slog.Error("Failed to load config file", "error", err)
 			os.Exit(1)
 		}
+	}
+
+	// Server mode - start web UI
+	if *serverMode {
+		if cfg.SourceDB == "" || cfg.TargetDB == "" {
+			fmt.Fprintf(os.Stderr, "Server mode requires -source and -target database connection strings\n")
+			fmt.Fprintf(os.Stderr, "Usage: %s -server -source <source_db> -target <target_db> [-port 8080]\n", os.Args[0])
+			os.Exit(1)
+		}
+
+		// Set up graceful shutdown with context cancellation
+		ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+		defer cancel()
+
+		srv := server.New(&server.Config{
+			Port:     *serverPort,
+			SourceDB: cfg.SourceDB,
+			TargetDB: cfg.TargetDB,
+			Schema:   cfg.Schema,
+		})
+
+		if err := srv.Start(ctx); err != nil {
+			slog.Error("Server error", "error", err)
+			os.Exit(1)
+		}
+		return
 	}
 
 	// Validate and apply defaults

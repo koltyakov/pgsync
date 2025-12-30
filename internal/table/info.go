@@ -42,3 +42,36 @@ func (t *Info) EstimatedWork() int64 {
 func (t *Info) FullName() string {
 	return t.Schema + "." + t.Name
 }
+
+// FilterColumns returns a new Info with only the specified columns
+// Primary key columns are always included even if not in the filter
+func (t *Info) FilterColumns(includeColumns []string) *Info {
+	if len(includeColumns) == 0 {
+		return t // No filter, return original
+	}
+
+	// Build a set of columns to include (always include PKs)
+	includeSet := make(map[string]bool)
+	for _, col := range includeColumns {
+		includeSet[strings.ToLower(col)] = true
+	}
+	for _, pk := range t.PrimaryKey {
+		includeSet[strings.ToLower(pk)] = true
+	}
+
+	// Filter columns while preserving order
+	var filtered []string
+	for _, col := range t.Columns {
+		if includeSet[strings.ToLower(col)] {
+			filtered = append(filtered, col)
+		}
+	}
+
+	return &Info{
+		Name:       t.Name,
+		Schema:     t.Schema,
+		Columns:    filtered,
+		PrimaryKey: t.PrimaryKey,
+		RowCount:   t.RowCount,
+	}
+}

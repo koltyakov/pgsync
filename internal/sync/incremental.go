@@ -341,11 +341,15 @@ func (s *Syncer) syncTable(ctx context.Context, tableInfo *table.Info) error {
 	preUp, preDel := s.tableCounts(tableName)
 	defer func() {
 		postUp, postDel := s.tableCounts(tableName)
+		deltaUp := postUp - preUp
+		deltaDel := postDel - preDel
 		s.logger.Info("Table sync completed",
 			"table", tableName,
-			"synced", postUp-preUp,
-			"deleted", postDel-preDel,
+			"synced", deltaUp,
+			"deleted", deltaDel,
 		)
+		// Notify progress handler
+		s.progress.OnTableComplete(tableName, deltaUp, deltaDel)
 	}()
 
 	// Reconcile mode: full comparison by primary key, ignore timestamps

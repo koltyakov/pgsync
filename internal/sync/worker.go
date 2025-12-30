@@ -29,6 +29,9 @@ func (s *Syncer) Sync(ctx context.Context) error {
 		return nil
 	}
 
+	// Notify progress handler of start
+	s.progress.OnStart(tables)
+
 	s.logger.Debug("Found tables to sync", "count", len(tables), "tables", strings.Join(tables, ", "))
 
 	// Get FK dependencies for topological sort
@@ -105,6 +108,9 @@ func (s *Syncer) Sync(ctx context.Context) error {
 		"deleted", totalDeletes,
 	)
 
+	// Notify progress handler of completion
+	s.progress.OnComplete(totalUpserts, totalDeletes)
+
 	// Log skipped tables if any
 	s.mu.Lock()
 	skipped := append([]string(nil), s.skippedTables...)
@@ -136,7 +142,7 @@ func (s *Syncer) syncLevel(ctx context.Context, tableInfos []*table.Info) error 
 		numWorkers = len(tableInfos)
 	}
 
-	workChan := make(chan *table.Info, len(tableInfos))
+	workChan := make(chan tableWork, len(tableInfos))
 	errChan := make(chan error, len(tableInfos))
 	var wg gosync.WaitGroup
 
@@ -145,14 +151,14 @@ func (s *Syncer) syncLevel(ctx context.Context, tableInfos []*table.Info) error 
 		wg.Add(1)
 		go func(workerID int) {
 			defer wg.Done()
-			s.levelWorker(ctx, workerID, workChan, errChan)
+			s.levelWorkerWithIndex(ctx, workerID, workChan, errChan)
 		}(i)
 	}
 
-	// Send work to workers
-	for _, info := range tableInfos {
+	// Send work to workers with index for progress tracking
+	for i, info := range tableInfos {
 		select {
-		case workChan <- info:
+		case workChan <- tableWork{info: info, index: i}:
 		case <-ctx.Done():
 			close(workChan)
 			wg.Wait()
@@ -182,10 +188,49 @@ func (s *Syncer) syncLevel(ctx context.Context, tableInfos []*table.Info) error 
 func (s *Syncer) levelWorker(ctx context.Context, workerID int, workChan <-chan *table.Info, errChan chan<- error) {
 	for {
 		select {
-		case tableInfo, ok := <-workChan:
+		case info, ok := <-workChan:
 			if !ok {
 				return // Channel closed
 			}
+			// Filter columns if specified in config
+			tableInfo := info
+			if cols, ok := s.cfg.IncludeColumns[info.Name]; ok && len(cols) > 0 {
+				tableInfo = info.FilterColumns(cols)
+			}
+			if err := s.syncTable(ctx, tableInfo); err != nil {
+				s.logger.Error("Error syncing table", "table", tableInfo.Name, "error", err)
+				errChan <- fmt.Errorf("table %s: %w", tableInfo.Name, err)
+			}
+		case <-ctx.Done():
+			return // Context cancelled
+		}
+	}
+}
+
+// tableWork pairs table info with its index for progress reporting
+type tableWork struct {
+	info  *table.Info
+	index int
+}
+
+// levelWorkerWithIndex processes table sync jobs with progress reporting
+func (s *Syncer) levelWorkerWithIndex(ctx context.Context, workerID int, workChan <-chan tableWork, errChan chan<- error) {
+	for {
+		select {
+		case work, ok := <-workChan:
+			if !ok {
+				return // Channel closed
+			}
+			// Filter columns if specified in config
+			tableInfo := work.info
+			if cols, ok := s.cfg.IncludeColumns[work.info.Name]; ok && len(cols) > 0 {
+				tableInfo = work.info.FilterColumns(cols)
+				s.logger.Debug("Filtered columns for table", "table", work.info.Name, "columns", strings.Join(tableInfo.Columns, ", "))
+			}
+
+			// Notify progress handler of table start
+			s.progress.OnTableStart(tableInfo.Name, work.index)
+
 			if err := s.syncTable(ctx, tableInfo); err != nil {
 				s.logger.Error("Error syncing table", "table", tableInfo.Name, "error", err)
 				errChan <- fmt.Errorf("table %s: %w", tableInfo.Name, err)

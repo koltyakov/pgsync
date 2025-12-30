@@ -12,18 +12,19 @@ import (
 
 // Config holds the application configuration
 type Config struct {
-	SourceDB      string   `json:"sourceDb"`
-	TargetDB      string   `json:"targetDb"`
-	Schema        string   `json:"schema"`
-	IncludeTables []string `json:"includeTables"`
-	ExcludeTables []string `json:"excludeTables"`
-	TimestampCol  string   `json:"timestampColumn"`
-	Parallel      int      `json:"parallel"`
-	BatchSize     int      `json:"batchSize"`
-	Verbose       bool     `json:"verbose"`
-	Integrity     bool     `json:"integrity"`
-	DryRun        bool     `json:"dryRun"`
-	Reconcile     bool     `json:"reconcile"` // Force full comparison by primary key, ignore timestamps
+	SourceDB       string              `json:"sourceDb"`
+	TargetDB       string              `json:"targetDb"`
+	Schema         string              `json:"schema"`
+	IncludeTables  []string            `json:"includeTables"`
+	ExcludeTables  []string            `json:"excludeTables"`
+	IncludeColumns map[string][]string `json:"includeColumns"` // Table -> columns to sync (empty = all)
+	TimestampCol   string              `json:"timestampColumn"`
+	Parallel       int                 `json:"parallel"`
+	BatchSize      int                 `json:"batchSize"`
+	Verbose        bool                `json:"verbose"`
+	Integrity      bool                `json:"integrity"`
+	DryRun         bool                `json:"dryRun"`
+	Reconcile      bool                `json:"reconcile"` // Force full comparison by primary key, ignore timestamps
 
 	// Connection pool settings (optional, defaults are computed from Parallel)
 	MaxOpenConns    int           `json:"maxOpenConns,omitempty"`
