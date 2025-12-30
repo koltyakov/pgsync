@@ -1,0 +1,52 @@
+version: "3.8"
+
+name: pgsync_e2e
+
+services:
+  source_db:
+    image: postgres:16-alpine
+    container_name: pgsync_source
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: crm_source
+    ports:
+      - "5433:5432"
+    volumes:
+      - source_data:/var/lib/postgresql/data
+      - ./init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d crm_source"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - pgsync_network
+
+  target_db:
+    image: postgres:16-alpine
+    container_name: pgsync_target
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: crm_target
+    ports:
+      - "5434:5432"
+    volumes:
+      - target_data:/var/lib/postgresql/data
+      - ./init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d crm_target"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - pgsync_network
+
+volumes:
+  source_data:
+  target_data:
+
+networks:
+  pgsync_network:
+    driver: bridge
