@@ -10,6 +10,9 @@ const getWsUrl = () => {
   return `${protocol}//${window.location.host}/ws`;
 };
 
+// Counter for unique log IDs within session
+let logIdCounter = 0;
+
 export function useWebSocket() {
   const [connected, setConnected] = useState(false);
   const [syncState, setSyncState] = useState<SyncState>({
@@ -25,7 +28,7 @@ export function useWebSocket() {
 
   const addLog = useCallback((level: LogEntry['level'], message: string, table?: string) => {
     const entry: LogEntry = {
-      id: `${Date.now()}-${Math.random().toString(36).slice(2, 11)}`,
+      id: `log-${Date.now()}-${++logIdCounter}`,
       timestamp: new Date(),
       level,
       message,
@@ -40,6 +43,11 @@ export function useWebSocket() {
   const handleMessage = useCallback((event: MessageEvent) => {
     try {
       const msg: ProgressMessage = JSON.parse(event.data);
+      
+      // Ignore empty or malformed messages
+      if (!msg || !msg.type) {
+        return;
+      }
       
       switch (msg.type) {
         case 'progress':

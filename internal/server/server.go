@@ -142,8 +142,12 @@ func (s *Server) Start(ctx context.Context) error {
 
 	addr := fmt.Sprintf(":%d", s.port)
 	server := &http.Server{
-		Addr:    addr,
-		Handler: corsMiddleware(mux),
+		Addr:              addr,
+		Handler:           corsMiddleware(mux),
+		ReadTimeout:       30 * time.Second,
+		ReadHeaderTimeout: 10 * time.Second,
+		WriteTimeout:      60 * time.Second,
+		IdleTimeout:       120 * time.Second,
 	}
 
 	s.logger.Info("Starting pgsync web server", "port", s.port, "url", fmt.Sprintf("http://localhost:%d", s.port))

@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useCallback, useMemo } from 'react';
 import type { LogEntry } from '../types';
 
 interface LogViewerProps {
@@ -16,21 +16,21 @@ export function LogViewer({ logs, maxHeight = 400 }: LogViewerProps) {
     }
   }, [logs]);
 
-  const handleScroll = () => {
+  const handleScroll = useCallback(() => {
     if (!containerRef.current) return;
     const { scrollTop, scrollHeight, clientHeight } = containerRef.current;
     // Enable auto-scroll if user is near the bottom
     autoScrollRef.current = scrollHeight - scrollTop - clientHeight < 50;
-  };
+  }, []);
 
-  const formatTime = (date: Date) => {
+  const formatTime = useMemo(() => (date: Date) => {
     return date.toLocaleTimeString('en-US', {
       hour12: false,
       hour: '2-digit',
       minute: '2-digit',
       second: '2-digit',
     });
-  };
+  }, []);
 
   if (logs.length === 0) {
     return (

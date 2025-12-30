@@ -42,9 +42,9 @@ func (s *Syncer) Sync(ctx context.Context) error {
 	}
 
 	// Build a set of tables we're syncing (for filtering deps)
-	tableSet := make(map[string]bool)
+	tableSet := make(map[string]struct{})
 	for _, t := range tables {
-		tableSet[t] = true
+		tableSet[t] = struct{}{}
 	}
 
 	// Sort tables by dependency order (parents first, then children)
@@ -282,13 +282,13 @@ func (s *Syncer) levelWorkerWithIndex(ctx context.Context, workerID int, workCha
 
 // findIgnoredColumns returns columns from original that are not in syncing
 func findIgnoredColumns(original, syncing []string) []string {
-	syncingSet := make(map[string]bool, len(syncing))
+	syncingSet := make(map[string]struct{}, len(syncing))
 	for _, c := range syncing {
-		syncingSet[c] = true
+		syncingSet[c] = struct{}{}
 	}
 	var ignored []string
 	for _, c := range original {
-		if !syncingSet[c] {
+		if _, exists := syncingSet[c]; !exists {
 			ignored = append(ignored, c)
 		}
 	}
@@ -296,7 +296,7 @@ func findIgnoredColumns(original, syncing []string) []string {
 }
 
 // topologicalSort sorts tables so that parent tables come before children (FK dependencies)
-func topologicalSort(tables []string, deps []db.TableDependency, tableSet map[string]bool) []string {
+func topologicalSort(tables []string, deps []db.TableDependency, tableSet map[string]struct{}) []string {
 	if len(deps) == 0 {
 		return tables
 	}
@@ -305,7 +305,9 @@ func topologicalSort(tables []string, deps []db.TableDependency, tableSet map[st
 	dependsOn := make(map[string][]string)
 	for _, dep := range deps {
 		// Only consider dependencies where both tables are in our sync set
-		if tableSet[dep.Table] && tableSet[dep.DependsOn] {
+		_, tableInSet := tableSet[dep.Table]
+		_, dependsOnInSet := tableSet[dep.DependsOn]
+		if tableInSet && dependsOnInSet {
 			dependsOn[dep.Table] = append(dependsOn[dep.Table], dep.DependsOn)
 		}
 	}
@@ -372,20 +374,22 @@ func topologicalSort(tables []string, deps []db.TableDependency, tableSet map[st
 
 // groupByDependencyLevel groups tables into levels where tables in the same level
 // have no dependencies on each other and can be synced in parallel
-func groupByDependencyLevel(tableInfos []*table.Info, deps []db.TableDependency, tableSet map[string]bool) [][]*table.Info {
+func groupByDependencyLevel(tableInfos []*table.Info, deps []db.TableDependency, tableSet map[string]struct{}) [][]*table.Info {
 	if len(deps) == 0 || len(tableInfos) == 0 {
 		// No dependencies - all tables can be synced in parallel
 		return [][]*table.Info{tableInfos}
 	}
 
 	// Build dependency map
-	dependsOn := make(map[string]map[string]bool)
+	dependsOn := make(map[string]map[string]struct{})
 	for _, dep := range deps {
-		if tableSet[dep.Table] && tableSet[dep.DependsOn] {
+		_, tableInSet := tableSet[dep.Table]
+		_, dependsOnInSet := tableSet[dep.DependsOn]
+		if tableInSet && dependsOnInSet {
 			if dependsOn[dep.Table] == nil {
-				dependsOn[dep.Table] = make(map[string]bool)
+				dependsOn[dep.Table] = make(map[string]struct{})
 			}
-			dependsOn[dep.Table][dep.DependsOn] = true
+			dependsOn[dep.Table][dep.DependsOn] = struct{}{}
 		}
 	}
 
@@ -405,7 +409,7 @@ func groupByDependencyLevel(tableInfos []*table.Info, deps []db.TableDependency,
 
 		maxDepLevel := -1
 		for dep := range dependsOn[tableName] {
-			if tableSet[dep] {
+			if _, exists := tableSet[dep]; exists {
 				depLevel := assignLevel(dep)
 				if depLevel > maxDepLevel {
 					maxDepLevel = depLevel

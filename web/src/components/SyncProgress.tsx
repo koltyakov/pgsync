@@ -7,9 +7,9 @@ interface SyncProgressProps {
 }
 
 export function SyncProgress({ syncState }: SyncProgressProps) {
-  const { running, progress, currentTable, tableIndex, totalTables, stats, error } = syncState;
+  const { running, progress, currentTable, tableIndex = 0, totalTables = 0, stats, error } = syncState;
 
-  const getStatus = () => {
+  const getStatus = (): 'exception' | 'success' | 'active' | 'normal' => {
     if (error) return 'exception';
     if (progress === 100) return 'success';
     if (running) return 'active';

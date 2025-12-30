@@ -195,6 +195,15 @@ func (s *Server) runSync(parentCtx context.Context, req SyncRequest) {
 
 // syncError handles sync errors
 func (s *Server) syncError(err error) {
+	// Don't report context cancellation as error
+	if err == context.Canceled || err == context.DeadlineExceeded {
+		s.mu.Lock()
+		s.syncState.Running = false
+		s.syncState.CurrentStep = "Cancelled"
+		s.mu.Unlock()
+		return
+	}
+
 	s.mu.Lock()
 	s.syncState.Running = false
 	s.syncState.CurrentStep = "Error"

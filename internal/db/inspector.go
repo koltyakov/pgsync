@@ -4,8 +4,10 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"sync"
 
 	"github.com/koltyakov/pgsync/internal/table"
+	"github.com/lib/pq"
 )
 
 // Inspector provides database inspection capabilities
@@ -26,6 +28,10 @@ func NewInspector(sourceDB, targetDB *sql.DB, schema string) *Inspector {
 
 // GetTables returns all tables in the specified schema
 func (i *Inspector) GetTables(ctx context.Context) ([]string, error) {
+	if i.sourceDB == nil {
+		return nil, fmt.Errorf("source database connection is nil")
+	}
+
 	query := `
 		SELECT table_name 
 		FROM information_schema.tables 
@@ -37,7 +43,7 @@ func (i *Inspector) GetTables(ctx context.Context) ([]string, error) {
 		return nil, fmt.Errorf("failed to query tables: %w", err)
 	}
 	defer func() {
-		_ = rows.Close() // Ignore error in deferred close
+		_ = rows.Close()
 	}()
 
 	var tables []string
@@ -57,31 +63,60 @@ func (i *Inspector) GetTables(ctx context.Context) ([]string, error) {
 }
 
 // GetTableInfo returns detailed information about a table
+// Runs queries concurrently for better performance
 func (i *Inspector) GetTableInfo(ctx context.Context, tableName string) (*table.Info, error) {
+	if i.sourceDB == nil {
+		return nil, fmt.Errorf("source database connection is nil")
+	}
+
 	info := &table.Info{
 		Name:   tableName,
 		Schema: i.schema,
 	}
 
-	// Get columns
-	columns, err := i.getColumns(ctx, tableName)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get columns: %w", err)
+	// Run queries concurrently for better performance
+	var wg sync.WaitGroup
+	var columnsErr, pkErr, countErr error
+	var columns, primaryKey []string
+	var rowCount int64
+
+	wg.Add(3)
+
+	go func() {
+		defer wg.Done()
+		columns, columnsErr = i.getColumns(ctx, tableName)
+	}()
+
+	go func() {
+		defer wg.Done()
+		primaryKey, pkErr = i.getPrimaryKey(ctx, tableName)
+	}()
+
+	go func() {
+		defer wg.Done()
+		rowCount, countErr = i.getRowCount(ctx, tableName)
+	}()
+
+	wg.Wait()
+
+	// Check context first - if canceled, return early without detailed errors
+	if ctx.Err() != nil {
+		return nil, ctx.Err()
 	}
+
+	// Return first error encountered
+	if columnsErr != nil {
+		return nil, fmt.Errorf("failed to get columns: %w", columnsErr)
+	}
+	if pkErr != nil {
+		return nil, fmt.Errorf("failed to get primary key: %w", pkErr)
+	}
+	if countErr != nil {
+		return nil, fmt.Errorf("failed to get row count: %w", countErr)
+	}
+
 	info.Columns = columns
-
-	// Get primary key
-	primaryKey, err := i.getPrimaryKey(ctx, tableName)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get primary key: %w", err)
-	}
 	info.PrimaryKey = primaryKey
-
-	// Get row count estimate
-	rowCount, err := i.getRowCount(ctx, tableName)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get row count: %w", err)
-	}
 	info.RowCount = rowCount
 
 	return info, nil
@@ -100,7 +135,7 @@ func (i *Inspector) getColumns(ctx context.Context, tableName string) ([]string,
 		return nil, fmt.Errorf("failed to query columns: %w", err)
 	}
 	defer func() {
-		_ = rows.Close() // Ignore error in deferred close
+		_ = rows.Close()
 	}()
 
 	var columns []string
@@ -128,14 +163,14 @@ func (i *Inspector) getPrimaryKey(ctx context.Context, tableName string) ([]stri
 		WHERE i.indrelid = $1::regclass AND i.indisprimary
 		ORDER BY array_position(i.indkey, a.attnum)`
 
-	// Quote the table name to handle CamelCase names from .NET Entity Framework
-	fullTableName := fmt.Sprintf("%s.\"%s\"", i.schema, tableName)
+	// Use pq.QuoteIdentifier to safely quote identifiers and prevent SQL injection
+	fullTableName := pq.QuoteIdentifier(i.schema) + "." + pq.QuoteIdentifier(tableName)
 	rows, err := i.sourceDB.QueryContext(ctx, query, fullTableName)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query primary key for %s: %w", tableName, err)
 	}
 	defer func() {
-		_ = rows.Close() // Ignore error in deferred close
+		_ = rows.Close()
 	}()
 
 	var primaryKey []string
@@ -158,12 +193,12 @@ func (i *Inspector) getPrimaryKey(ctx context.Context, tableName string) ([]stri
 // Uses COUNT(*) to get accurate results rather than estimates from pg_stat_user_tables
 // which can be stale and not reflect recent inserts/deletes
 func (i *Inspector) getRowCount(ctx context.Context, tableName string) (int64, error) {
-	// Quote the table name to handle CamelCase names from .NET Entity Framework
-	countQuery := fmt.Sprintf("SELECT COUNT(*) FROM %s.\"%s\"", i.schema, tableName)
+	// Use pq.QuoteIdentifier to safely quote identifiers and prevent SQL injection
+	countQuery := "SELECT COUNT(*) FROM " + pq.QuoteIdentifier(i.schema) + "." + pq.QuoteIdentifier(tableName)
 	var count int64
 	err := i.sourceDB.QueryRowContext(ctx, countQuery).Scan(&count)
 	if err != nil {
-		return 0, err
+		return 0, fmt.Errorf("failed to count rows in %s: %w", tableName, err)
 	}
 	return count, nil
 }
@@ -178,6 +213,10 @@ type TableDependency struct {
 // GetTableDependencies returns all foreign key dependencies for tables in the schema
 // This is used to determine the correct order for syncing tables
 func (i *Inspector) GetTableDependencies(ctx context.Context) ([]TableDependency, error) {
+	if i.sourceDB == nil {
+		return nil, fmt.Errorf("source database connection is nil")
+	}
+
 	query := `
 		SELECT 
 			tc.table_name AS table_name,
@@ -201,7 +240,7 @@ func (i *Inspector) GetTableDependencies(ctx context.Context) ([]TableDependency
 	}()
 
 	var deps []TableDependency
-	seen := make(map[string]bool) // Deduplicate (a table may have multiple FKs to same table)
+	seen := make(map[string]struct{}) // Deduplicate (a table may have multiple FKs to same table)
 	for rows.Next() {
 		var dep TableDependency
 		if err := rows.Scan(&dep.Table, &dep.DependsOn, &dep.Constraint); err != nil {
@@ -212,8 +251,8 @@ func (i *Inspector) GetTableDependencies(ctx context.Context) ([]TableDependency
 			continue
 		}
 		key := dep.Table + "->" + dep.DependsOn
-		if !seen[key] {
-			seen[key] = true
+		if _, exists := seen[key]; !exists {
+			seen[key] = struct{}{}
 			deps = append(deps, dep)
 		}
 	}
@@ -238,7 +277,7 @@ func (i *Inspector) TableExistsInTarget(ctx context.Context, tableName string) (
 	var exists bool
 	err := i.targetDB.QueryRowContext(ctx, query, i.schema, tableName).Scan(&exists)
 	if err != nil {
-		return false, fmt.Errorf("failed to check table existence: %w", err)
+		return false, fmt.Errorf("failed to check table existence in target: %w", err)
 	}
 	return exists, nil
 }
@@ -258,15 +297,22 @@ func (i *Inspector) GetTargetColumns(ctx context.Context, tableName string) ([]s
 	if err != nil {
 		return nil, fmt.Errorf("failed to query target columns: %w", err)
 	}
-	defer func() { _ = rows.Close() }()
+	defer func() {
+		_ = rows.Close()
+	}()
 
 	var columns []string
 	for rows.Next() {
 		var col string
 		if err := rows.Scan(&col); err != nil {
-			return nil, fmt.Errorf("failed to scan column: %w", err)
+			return nil, fmt.Errorf("failed to scan target column: %w", err)
 		}
 		columns = append(columns, col)
 	}
-	return columns, rows.Err()
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating target columns: %w", err)
+	}
+
+	return columns, nil
 }
