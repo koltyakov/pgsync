@@ -22,44 +22,50 @@ if ! docker exec pgsync_target pg_isready -U "$TARGET_USER" -d "$TARGET_DB" >/de
 fi
 
 # Truncate all tables in the target database (in proper order due to FK constraints)
-docker exec pgsync_target psql -U "$TARGET_USER" -d "$TARGET_DB" <<'EOF'
--- Disable triggers to allow truncating tables with foreign keys
-SET session_replication_role = replica;
-
--- Truncate all tables in reverse dependency order
+# Using CASCADE to handle foreign key dependencies automatically
+docker exec pgsync_target psql -U "$TARGET_USER" -d "$TARGET_DB" -c "
 TRUNCATE TABLE 
-    audit_logs,
-    email_logs,
-    ticket_comments,
-    activities,
-    line_items,
-    tickets,
-    deals,
-    opportunities,
-    leads,
-    price_book_entries,
-    contacts,
-    team_members,
-    organizations,
-    products,
-    price_books,
-    product_categories,
-    email_templates,
-    pipeline_stages,
+    users,
     teams,
-    users
+    pipeline_stages,
+    email_templates,
+    product_categories,
+    price_books,
+    products,
+    organizations,
+    team_members,
+    contacts,
+    price_book_entries,
+    leads,
+    opportunities,
+    deals,
+    tickets,
+    line_items,
+    activities,
+    ticket_comments,
+    email_logs,
+    audit_logs
 CASCADE;
+"
 
--- Re-enable triggers
-SET session_replication_role = DEFAULT;
+# Verify all tables are empty
+echo ""
+echo "Verifying tables are empty..."
+docker exec pgsync_target psql -U "$TARGET_USER" -d "$TARGET_DB" -c "
+SELECT tablename, 
+       (SELECT COUNT(*) FROM public.\"\$1\" WHERE tablename = t.tablename) 
+FROM pg_tables t WHERE schemaname = 'public';
+" 2>/dev/null || true
 
--- Verify all tables are empty
-SELECT 
-    schemaname || '.' || relname AS table_name,
-    n_live_tup AS row_count
-FROM pg_stat_user_tables
-WHERE n_live_tup > 0
-ORDER BY relname;
+# Show actual counts
+docker exec pgsync_target psql -U "$TARGET_USER" -d "$TARGET_DB" <<'EOF'
+SELECT 'users' AS tbl, COUNT(*) FROM users
+UNION ALL SELECT 'teams', COUNT(*) FROM teams
+UNION ALL SELECT 'contacts', COUNT(*) FROM contacts
+UNION ALL SELECT 'organizations', COUNT(*) FROM organizations
+UNION ALL SELECT 'deals', COUNT(*) FROM deals
+UNION ALL SELECT 'products', COUNT(*) FROM products
+ORDER BY tbl;
 EOF
 
 echo ""
