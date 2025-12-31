@@ -188,14 +188,14 @@ func TestValidateAppliesDefaults(t *testing.T) {
 	if cfg.Parallel != 4 {
 		t.Errorf("expected parallel 4, got %d", cfg.Parallel)
 	}
-	if cfg.BatchSize != 1000 {
-		t.Errorf("expected batchSize 1000, got %d", cfg.BatchSize)
+	if cfg.BatchSize != 5000 {
+		t.Errorf("expected batchSize 5000, got %d", cfg.BatchSize)
 	}
-	if cfg.MaxOpenConns != 8 { // 4 * 2
-		t.Errorf("expected maxOpenConns 8, got %d", cfg.MaxOpenConns)
+	if cfg.MaxOpenConns != 12 { // 4 * 3
+		t.Errorf("expected maxOpenConns 12, got %d", cfg.MaxOpenConns)
 	}
-	if cfg.MaxIdleConns != 4 { // 4 * 1
-		t.Errorf("expected maxIdleConns 4, got %d", cfg.MaxIdleConns)
+	if cfg.MaxIdleConns != 8 { // 4 * 2
+		t.Errorf("expected maxIdleConns 8, got %d", cfg.MaxIdleConns)
 	}
 }
 
@@ -259,10 +259,10 @@ func TestValidateBoundsChecking(t *testing.T) {
 			config: &Config{
 				SourceDB:  "postgres://localhost/source",
 				TargetDB:  "postgres://localhost/target",
-				BatchSize: 50000,
+				BatchSize: 100000,
 			},
 			wantError: true,
-			errorMsg:  "batchSize value 50000 exceeds maximum 10000: reduce batch size to prevent memory exhaustion",
+			errorMsg:  "batchSize value 100000 exceeds maximum 50000: reduce batch size to prevent memory exhaustion",
 		},
 		{
 			name: "small batchSize gets clamped to minimum",

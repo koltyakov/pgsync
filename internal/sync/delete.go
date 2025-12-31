@@ -5,12 +5,14 @@ import (
 	"database/sql"
 	"fmt"
 	"strings"
+	gosync "sync"
 
 	"github.com/koltyakov/pgsync/internal/constants"
 	"github.com/koltyakov/pgsync/internal/table"
 )
 
 // handleDeletedRows identifies and removes deleted rows from target
+// Uses parallel PK fetching for better performance on large tables
 func (s *Syncer) handleDeletedRows(ctx context.Context, tableInfo *table.Info) error {
 	if ctx.Err() != nil {
 		return ctx.Err()
@@ -22,58 +24,97 @@ func (s *Syncer) handleDeletedRows(ctx context.Context, tableInfo *table.Info) e
 
 	pkCols := s.quotedColumnsList(tableInfo.PrimaryKey)
 
-	// Get all primary keys from source
-	sourceQuery := fmt.Sprintf("SELECT %s FROM %s", pkCols, s.quotedTableName(tableInfo.Name))
-	sourceRows, err := s.sourceDB.QueryContext(ctx, sourceQuery)
-	if err != nil {
-		return fmt.Errorf("failed to query source primary keys: %w", err)
-	}
-	defer func() { _ = sourceRows.Close() }()
+	// Fetch source and target PKs in parallel for better performance
+	var sourcePKs map[string]struct{}
+	var targetPKsChan = make(chan map[string][]any, 1)
+	var sourceErr, targetErr error
+	var wg gosync.WaitGroup
 
-	sourcePKs := make(map[string]struct{})
-	for sourceRows.Next() {
-		values := make([]any, len(tableInfo.PrimaryKey))
-		scanArgs := make([]any, len(tableInfo.PrimaryKey))
-		for i := range values {
-			scanArgs[i] = &values[i]
+	wg.Add(2)
+
+	// Fetch source PKs
+	go func() {
+		defer wg.Done()
+		sourcePKs = make(map[string]struct{})
+		sourceQuery := fmt.Sprintf("SELECT %s FROM %s", pkCols, s.quotedTableName(tableInfo.Name))
+		sourceRows, err := s.sourceDB.QueryContext(ctx, sourceQuery)
+		if err != nil {
+			sourceErr = fmt.Errorf("failed to query source primary keys: %w", err)
+			return
 		}
+		defer func() { _ = sourceRows.Close() }()
 
-		if err := sourceRows.Scan(scanArgs...); err != nil {
-			return fmt.Errorf("failed to scan source primary key: %w", err)
+		for sourceRows.Next() {
+			values := make([]any, len(tableInfo.PrimaryKey))
+			scanArgs := make([]any, len(tableInfo.PrimaryKey))
+			for i := range values {
+				scanArgs[i] = &values[i]
+			}
+			if err := sourceRows.Scan(scanArgs...); err != nil {
+				sourceErr = fmt.Errorf("failed to scan source primary key: %w", err)
+				return
+			}
+			pkStr := s.createPKString(values)
+			sourcePKs[pkStr] = struct{}{}
 		}
+		if err := sourceRows.Err(); err != nil {
+			sourceErr = fmt.Errorf("error iterating source rows: %w", err)
+		}
+	}()
 
-		pkStr := s.createPKString(values)
-		sourcePKs[pkStr] = struct{}{}
+	// Fetch target PKs
+	go func() {
+		defer wg.Done()
+		targetPKs := make(map[string][]any)
+		targetQuery := fmt.Sprintf("SELECT %s FROM %s", pkCols, s.quotedTableName(tableInfo.Name))
+		targetRows, err := s.targetDB.QueryContext(ctx, targetQuery)
+		if err != nil {
+			targetErr = fmt.Errorf("failed to query target primary keys: %w", err)
+			targetPKsChan <- nil
+			return
+		}
+		defer func() { _ = targetRows.Close() }()
+
+		for targetRows.Next() {
+			values := make([]any, len(tableInfo.PrimaryKey))
+			scanArgs := make([]any, len(tableInfo.PrimaryKey))
+			for i := range values {
+				scanArgs[i] = &values[i]
+			}
+			if err := targetRows.Scan(scanArgs...); err != nil {
+				targetErr = fmt.Errorf("failed to scan target primary key: %w", err)
+				targetPKsChan <- nil
+				return
+			}
+			pkStr := s.createPKString(values)
+			targetPKs[pkStr] = values
+		}
+		if err := targetRows.Err(); err != nil {
+			targetErr = fmt.Errorf("error iterating target rows: %w", err)
+		}
+		targetPKsChan <- targetPKs
+	}()
+
+	wg.Wait()
+
+	if sourceErr != nil {
+		return sourceErr
+	}
+	if targetErr != nil {
+		return targetErr
 	}
 
-	if err := sourceRows.Err(); err != nil {
-		return fmt.Errorf("error iterating source rows: %w", err)
+	targetPKs := <-targetPKsChan
+	if targetPKs == nil {
+		return fmt.Errorf("failed to fetch target PKs")
 	}
 
-	// Get all primary keys from target and identify deletions
-	targetQuery := fmt.Sprintf("SELECT %s FROM %s", pkCols, s.quotedTableName(tableInfo.Name))
-	targetRows, err := s.targetDB.QueryContext(ctx, targetQuery)
-	if err != nil {
-		return fmt.Errorf("failed to query target primary keys: %w", err)
-	}
-	defer func() { _ = targetRows.Close() }()
-
+	// Identify rows to delete (in target but not in source)
 	var toDelete [][]any
-	for targetRows.Next() {
-		values := make([]any, len(tableInfo.PrimaryKey))
-		scanArgs := make([]any, len(tableInfo.PrimaryKey))
-		for i := range values {
-			scanArgs[i] = &values[i]
-		}
-
-		if err := targetRows.Scan(scanArgs...); err != nil {
-			return fmt.Errorf("failed to scan target primary key: %w", err)
-		}
-
-		pkStr := s.createPKString(values)
+	for pkStr, values := range targetPKs {
 		if _, exists := sourcePKs[pkStr]; !exists {
 			toDelete = append(toDelete, values)
-			// Chunked deletion using batch size to avoid large statements
+			// Chunked deletion using batch size
 			if s.cfg.BatchSize > 0 && len(toDelete) >= s.cfg.BatchSize {
 				s.logger.Debug("Deleting rows chunk", "table", tableInfo.Name, "count", len(toDelete))
 				if err := s.deleteRows(ctx, tableInfo, toDelete); err != nil {
@@ -85,18 +126,12 @@ func (s *Syncer) handleDeletedRows(ctx context.Context, tableInfo *table.Info) e
 		}
 	}
 
-	if err := targetRows.Err(); err != nil {
-		return fmt.Errorf("error iterating target rows: %w", err)
-	}
-
-	// Delete remaining rows that exist in target but not in source
+	// Delete remaining rows
 	if len(toDelete) > 0 {
 		s.logger.Debug("Deleting rows", "table", tableInfo.Name, "count", len(toDelete))
-
 		if err := s.deleteRows(ctx, tableInfo, toDelete); err != nil {
 			return fmt.Errorf("failed to delete rows: %w", err)
 		}
-
 		s.addDeletes(tableInfo.Name, len(toDelete))
 	}
 
@@ -177,8 +212,9 @@ func (s *Syncer) deleteAllInChunks(ctx context.Context, tableInfo *table.Info) e
 	return nil
 }
 
-// BulkDeleteBatchSize defines the number of rows per bulk DELETE statement
-const BulkDeleteBatchSize = 100
+// BulkDeleteBatchSize defines the number of rows per bulk DELETE statement.
+// 500 rows provides good balance between query size and round-trip reduction.
+const BulkDeleteBatchSize = 500
 
 // deleteRows deletes specified rows from target table using bulk operations
 func (s *Syncer) deleteRows(ctx context.Context, tableInfo *table.Info, rows [][]any) error {

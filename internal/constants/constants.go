@@ -17,11 +17,13 @@ const (
 	MinParallel = 1
 
 	// DefaultBatchSize is the default number of rows to process per batch.
-	// Range: 100-10000. Larger batches improve throughput but use more memory.
-	DefaultBatchSize = 1000
+	// Range: 100-50000. Larger batches improve throughput but use more memory.
+	// 5000 provides good balance for most workloads.
+	DefaultBatchSize = 5000
 
 	// MaxBatchSize is the maximum batch size to prevent memory exhaustion.
-	MaxBatchSize = 10000
+	// 50000 rows is safe for most systems and significantly improves throughput.
+	MaxBatchSize = 50000
 
 	// MinBatchSize is the minimum batch size for meaningful batching.
 	MinBatchSize = 100
@@ -29,7 +31,9 @@ const (
 	// SmallTableThreshold defines the maximum row count for a table to be considered "small"
 	// and eligible for full-table sync without a timestamp column.
 	// Tables above this threshold require a timestamp column for incremental sync.
-	SmallTableThreshold = 1000
+	// 5000 rows provides good balance - full comparison is efficient at this scale
+	// and avoids requiring timestamp columns for medium-sized lookup tables.
+	SmallTableThreshold = 5000
 
 	// DefaultTimestampColumn is the default column name used for incremental sync.
 	// Must be a timestamp/timestamptz column that is updated on row modification.
@@ -46,10 +50,12 @@ const (
 	MaxConnMaxLifetime = 30 * time.Minute
 
 	// DefaultMaxIdleConnsMultiplier is calculated as a multiplier of Parallel workers.
-	DefaultMaxIdleConnsMultiplier = 1
+	// Higher idle conn count reduces connection setup overhead for bursty workloads.
+	DefaultMaxIdleConnsMultiplier = 2
 
 	// DefaultMaxOpenConnsMultiplier is calculated as a multiplier of Parallel workers.
-	DefaultMaxOpenConnsMultiplier = 2
+	// Allows each worker to have multiple concurrent operations (fetch + upsert).
+	DefaultMaxOpenConnsMultiplier = 3
 
 	// MaxColumnNameLength is the maximum length for a PostgreSQL identifier.
 	MaxColumnNameLength = 63
