@@ -27,6 +27,9 @@ This directory contains a complete end-to-end testing environment for pgsync, fe
 
 # 6. Cleanup when done
 ./teardown.sh --volumes
+
+# Optional: Clean only target DB (keeps source data)
+./clean_target.sh
 ```
 
 ## Directory Structure
@@ -36,6 +39,7 @@ e2e/
 ├── docker-compose.yml     # PostgreSQL containers
 ├── setup.sh              # Setup script
 ├── teardown.sh           # Cleanup script  
+├── clean_target.sh       # Clean target DB only
 ├── run_sync.sh           # Run pgsync
 ├── run_mutations.sh      # Run mutation simulator
 ├── compare_dbs.sh        # Compare source vs target
