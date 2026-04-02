@@ -16,6 +16,9 @@ This directory contains a complete end-to-end testing environment for pgsync, fe
 # 2. Run initial sync
 ./run_sync.sh # --verbose
 
+# Optional: Start the web UI for interactive sync
+./run_ui.sh              # Opens on http://localhost:8080
+
 # 3. Verify sync (compare row counts)
 ./compare_dbs.sh
 
@@ -32,6 +35,8 @@ This directory contains a complete end-to-end testing environment for pgsync, fe
 ./clean_target.sh
 ```
 
+`./setup.sh` resets both the source and target databases on each run before reseeding, so it is safe to rerun against existing Docker volumes.
+
 ## Directory Structure
 
 ```
@@ -41,6 +46,7 @@ e2e/
 ├── teardown.sh           # Cleanup script  
 ├── clean_target.sh       # Clean target DB only
 ├── run_sync.sh           # Run pgsync
+├── run_ui.sh             # Run pgsync Web UI
 ├── run_mutations.sh      # Run mutation simulator
 ├── compare_dbs.sh        # Compare source vs target
 ├── init/
@@ -125,6 +131,14 @@ postgres://postgres:postgres@localhost:5434/crm_target?sslmode=disable
 ./setup.sh small
 ./run_sync.sh --verbose
 ./compare_dbs.sh
+```
+
+### Web UI Test
+
+```bash
+./setup.sh small
+./run_ui.sh
+# Open http://localhost:8080
 ```
 
 ### Incremental Sync Test

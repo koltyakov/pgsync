@@ -1,5 +1,3 @@
-version: "3.8"
-
 name: pgsync_e2e
 
 services:

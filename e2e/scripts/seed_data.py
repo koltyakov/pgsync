@@ -91,12 +91,13 @@ ACTIVITY_TYPES = ['call', 'meeting', 'task', 'email', 'note']
 ACTIVITY_STATUSES = ['planned', 'in_progress', 'completed', 'cancelled']
 
 class DataSeeder:
-    def __init__(self, conn_string: str, profile: str = 'small', batch_size: int = 1000):
+    def __init__(self, conn_string: str, profile: str = 'small', batch_size: int = 1000, reset: bool = False):
         self.conn = psycopg2.connect(conn_string)
         self.conn.autocommit = False
         self.cursor = self.conn.cursor()
         self.profile = PROFILES[profile]
         self.batch_size = batch_size
+        self.reset = reset
         
         # Cache for foreign key references
         self.user_ids = []
@@ -119,6 +120,8 @@ class DataSeeder:
         start = datetime.now()
         
         try:
+            if self.reset:
+                self._reset_database()
             self._seed_reference_data()
             self._load_existing_ids()
             self._seed_users()
@@ -149,6 +152,35 @@ class DataSeeder:
         finally:
             self.cursor.close()
             self.conn.close()
+
+    def _reset_database(self):
+        """Clear existing data so seeding can be rerun against persisted volumes."""
+        print("Resetting source database...")
+
+        self.cursor.execute("""
+            TRUNCATE TABLE
+                users,
+                teams,
+                pipeline_stages,
+                email_templates,
+                product_categories,
+                price_books,
+                products,
+                organizations,
+                team_members,
+                contacts,
+                price_book_entries,
+                leads,
+                opportunities,
+                deals,
+                tickets,
+                line_items,
+                activities,
+                ticket_comments,
+                email_logs,
+                audit_logs
+            RESTART IDENTITY CASCADE
+        """)
     
     def _seed_reference_data(self):
         """Seed reference/lookup tables that other tables depend on."""
@@ -930,6 +962,8 @@ def main():
     parser.add_argument('--profile', choices=PROFILES.keys(), default='small',
                        help='Data volume profile: small, medium, large, xlarge')
     parser.add_argument('--batch-size', type=int, default=1000, help='Insert batch size')
+    parser.add_argument('--reset', action='store_true',
+                       help='Truncate existing data before seeding')
     
     args = parser.parse_args()
     
@@ -938,7 +972,7 @@ def main():
     print(f"Connecting to {args.database} on {args.host}:{args.port}")
     print(f"Profile: {args.profile} - {PROFILES[args.profile]}")
     
-    seeder = DataSeeder(conn_string, args.profile, args.batch_size)
+    seeder = DataSeeder(conn_string, args.profile, args.batch_size, reset=args.reset)
     seeder.run()
 
 

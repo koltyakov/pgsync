@@ -53,6 +53,33 @@ if ! docker exec pgsync_target pg_isready -U postgres -d crm_target >/dev/null 2
     exit 1
 fi
 
+echo ""
+echo "Resetting target database..."
+docker exec pgsync_target psql -U postgres -d crm_target -c "
+TRUNCATE TABLE
+    users,
+    teams,
+    pipeline_stages,
+    email_templates,
+    product_categories,
+    price_books,
+    products,
+    organizations,
+    team_members,
+    contacts,
+    price_book_entries,
+    leads,
+    opportunities,
+    deals,
+    tickets,
+    line_items,
+    activities,
+    ticket_comments,
+    email_logs,
+    audit_logs
+RESTART IDENTITY CASCADE;
+"
+
 # Setup Python environment
 echo ""
 echo "Setting up Python environment..."
@@ -68,7 +95,7 @@ pip install -q -r requirements.txt
 # Seed data
 echo ""
 echo "Seeding source database with '$PROFILE' profile..."
-python seed_data.py --profile "$PROFILE"
+python seed_data.py --profile "$PROFILE" --reset
 
 deactivate
 cd ..
