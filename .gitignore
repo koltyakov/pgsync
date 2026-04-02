@@ -7,7 +7,13 @@ pgsync.exe
 tmp/
 __pycache__/
 *.pyc
+tmp/
 
 # Web UI build artifacts
 web/dist/
 web/node_modules/
+
+# Release artifacts
+dist/
+coverage.out
+coverage.html

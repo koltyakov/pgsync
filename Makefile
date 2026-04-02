@@ -1,4 +1,4 @@
-.PHONY: build clean test install deps lint fmt vet web web-dev server
+.PHONY: build clean test install deps lint fmt vet web web-dev server release release-local release-test ci
 
 # Binary name
 BINARY_NAME=pgsync
@@ -124,21 +124,44 @@ install: build
 	@echo "Installing $(BINARY_NAME)..."
 	@cp $(BUILD_DIR)/$(BINARY_NAME) $(GOPATH)/bin/
 
+# Release targets (requires goreleaser)
+release-local:
+	@echo "Building local release..."
+	goreleaser build --snapshot --clean
+
+release-test:
+	@echo "Testing release configuration..."
+	goreleaser check
+
+# make release VERSION=v1.0.0
+release:
+	@echo "Creating release..."
+	@if [ -z "$(VERSION)" ]; then echo "VERSION is required. Usage: make release VERSION=v1.0.0"; exit 1; fi
+	./scripts/release.sh $(VERSION)
+
+# Full CI check (runs all checks locally)
+ci: deps fmt vet lint test
+	@echo "All CI checks passed!"
+
 help:
 	@echo "Available targets:"
-	@echo "  build        - Build the binary"
-	@echo "  build-all    - Build for all platforms"
-	@echo "  clean        - Clean build artifacts"
-	@echo "  test         - Run tests"
-	@echo "  test-coverage- Run tests with coverage"
-	@echo "  deps         - Download dependencies"
-	@echo "  deps-update  - Update dependencies"
-	@echo "  fmt          - Format code"
-	@echo "  lint         - Run linter"
-	@echo "  vet          - Run go vet"
-	@echo "  install      - Install binary to GOPATH"
-	@echo "  web          - Build web UI"
-	@echo "  web-dev      - Start web dev server"
-	@echo "  server       - Build and start server with web UI"
-	@echo "  server-dev   - Start server without rebuilding web UI"
+	@echo "  build         - Build the binary"
+	@echo "  build-all     - Build for all platforms"
+	@echo "  clean         - Clean build artifacts"
+	@echo "  test          - Run tests"
+	@echo "  test-coverage - Run tests with coverage"
+	@echo "  deps          - Download dependencies"
+	@echo "  deps-update   - Update dependencies"
+	@echo "  fmt           - Format code"
+	@echo "  lint          - Run linter"
+	@echo "  vet           - Run go vet"
+	@echo "  install       - Install binary to GOPATH"
+	@echo "  web           - Build web UI"
+	@echo "  web-dev       - Start web dev server"
+	@echo "  server        - Build and start server with web UI"
+	@echo "  server-dev    - Start server without rebuilding web UI"
+	@echo "  release-local - Build local release with goreleaser"
+	@echo "  release-test  - Test release configuration"
+	@echo "  release       - Create and push release tag (requires VERSION)"
+	@echo "  ci            - Run all CI checks locally"
 
