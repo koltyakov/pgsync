@@ -1,3 +1,4 @@
+// Package web provides the embedded frontend assets for the pgsync web UI.
 package web
 
 import (

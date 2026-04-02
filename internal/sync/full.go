@@ -1,4 +1,4 @@
-package sync
+package sync //nolint:revive // intentionally shadows stdlib sync
 
 import (
 	"context"
@@ -138,7 +138,7 @@ func (s *Syncer) getAllSourceData(ctx context.Context, tableInfo *table.Info) ([
 	}
 
 	columns := s.quotedColumnsList(tableInfo.Columns)
-	query := fmt.Sprintf("SELECT %s FROM %s", columns, s.quotedTableName(tableInfo.Name))
+	query := fmt.Sprintf("SELECT %s FROM %s", columns, s.quotedTableName(tableInfo.Name)) //nolint:gosec // G201 - table/column names are safely quoted
 
 	rows, err := s.sourceDB.QueryContext(ctx, query)
 	if err != nil {
@@ -186,7 +186,7 @@ func (s *Syncer) getAllTargetData(ctx context.Context, tableInfo *table.Info) ([
 	}
 
 	columns := s.quotedColumnsList(tableInfo.Columns)
-	query := fmt.Sprintf("SELECT %s FROM %s", columns, s.quotedTableName(tableInfo.Name))
+	query := fmt.Sprintf("SELECT %s FROM %s", columns, s.quotedTableName(tableInfo.Name)) //nolint:gosec // G201 - table/column names are safely quoted
 
 	rows, err := s.targetDB.QueryContext(ctx, query)
 	if err != nil {

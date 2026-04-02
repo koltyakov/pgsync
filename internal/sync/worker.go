@@ -1,4 +1,4 @@
-package sync
+package sync //nolint:revive // intentionally shadows stdlib sync
 
 import (
 	"context"
@@ -236,7 +236,7 @@ type tableWork struct {
 }
 
 // levelWorkerWithIndex processes table sync jobs with progress reporting
-func (s *Syncer) levelWorkerWithIndex(ctx context.Context, workerID int, workChan <-chan tableWork, errChan chan<- error) {
+func (s *Syncer) levelWorkerWithIndex(ctx context.Context, _ int, workChan <-chan tableWork, errChan chan<- error) {
 	for {
 		select {
 		case work, ok := <-workChan:

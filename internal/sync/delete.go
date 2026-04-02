@@ -1,3 +1,4 @@
+// Package sync provides PostgreSQL table synchronization with incremental and full sync modes.
 package sync
 
 import (
@@ -36,7 +37,7 @@ func (s *Syncer) handleDeletedRows(ctx context.Context, tableInfo *table.Info) e
 	go func() {
 		defer wg.Done()
 		sourcePKs = make(map[string]struct{})
-		sourceQuery := fmt.Sprintf("SELECT %s FROM %s", pkCols, s.quotedTableName(tableInfo.Name))
+		sourceQuery := fmt.Sprintf("SELECT %s FROM %s", pkCols, s.quotedTableName(tableInfo.Name)) //nolint:gosec // G201 - table/column names are safely quoted
 		sourceRows, err := s.sourceDB.QueryContext(ctx, sourceQuery)
 		if err != nil {
 			sourceErr = fmt.Errorf("failed to query source primary keys: %w", err)
@@ -66,7 +67,7 @@ func (s *Syncer) handleDeletedRows(ctx context.Context, tableInfo *table.Info) e
 	go func() {
 		defer wg.Done()
 		targetPKs := make(map[string][]any)
-		targetQuery := fmt.Sprintf("SELECT %s FROM %s", pkCols, s.quotedTableName(tableInfo.Name))
+		targetQuery := fmt.Sprintf("SELECT %s FROM %s", pkCols, s.quotedTableName(tableInfo.Name)) //nolint:gosec // G201 - table/column names are safely quoted
 		targetRows, err := s.targetDB.QueryContext(ctx, targetQuery)
 		if err != nil {
 			targetErr = fmt.Errorf("failed to query target primary keys: %w", err)
@@ -147,7 +148,7 @@ func (s *Syncer) deleteAllInChunks(ctx context.Context, tableInfo *table.Info) e
 
 	if len(tableInfo.PrimaryKey) == 0 {
 		// Fall back to a single DELETE FROM table
-		query := fmt.Sprintf("DELETE FROM %s", s.quotedTableName(tableInfo.Name))
+		query := fmt.Sprintf("DELETE FROM %s", s.quotedTableName(tableInfo.Name)) //nolint:gosec // G201 - table name is safely quoted
 		res, err := s.targetDB.ExecContext(ctx, query)
 		if err != nil {
 			return fmt.Errorf("failed to delete all rows: %w", err)
@@ -170,7 +171,7 @@ func (s *Syncer) deleteAllInChunks(ctx context.Context, tableInfo *table.Info) e
 			return ctx.Err()
 		}
 
-		selectQuery := fmt.Sprintf("SELECT %s FROM %s LIMIT %d", pkCols, s.quotedTableName(tableInfo.Name), batch)
+		selectQuery := fmt.Sprintf("SELECT %s FROM %s LIMIT %d", pkCols, s.quotedTableName(tableInfo.Name), batch) //nolint:gosec // G201 - table/column names are safely quoted
 		rows, err := s.targetDB.QueryContext(ctx, selectQuery)
 		if err != nil {
 			return fmt.Errorf("failed to select rows for deletion: %w", err)
@@ -277,7 +278,7 @@ func (s *Syncer) bulkDeleteSinglePK(ctx context.Context, tx *sql.Tx, tableInfo *
 			args[j] = row[0] // Single PK value
 		}
 
-		query := fmt.Sprintf("DELETE FROM %s WHERE %s IN (%s)",
+		query := fmt.Sprintf("DELETE FROM %s WHERE %s IN (%s)", //nolint:gosec // G201 - table/column names are safely quoted
 			s.quotedTableName(tableInfo.Name),
 			pkCol,
 			strings.Join(placeholders, ", "))
@@ -293,7 +294,7 @@ func (s *Syncer) bulkDeleteSinglePK(ctx context.Context, tx *sql.Tx, tableInfo *
 // bulkDeleteCompositePK performs DELETE using prepared statement for composite PKs
 func (s *Syncer) bulkDeleteCompositePK(ctx context.Context, tx *sql.Tx, tableInfo *table.Info, rows [][]any) error {
 	whereClause := s.buildPKWhereClause(tableInfo.PrimaryKey)
-	deleteQuery := fmt.Sprintf("DELETE FROM %s WHERE %s", s.quotedTableName(tableInfo.Name), whereClause)
+	deleteQuery := fmt.Sprintf("DELETE FROM %s WHERE %s", s.quotedTableName(tableInfo.Name), whereClause) //nolint:gosec // G201 - table/column names are safely quoted
 
 	stmt, err := tx.PrepareContext(ctx, deleteQuery)
 	if err != nil {
@@ -324,7 +325,7 @@ func (s *Syncer) handleMissingRows(ctx context.Context, tableInfo *table.Info) e
 	pkCols := s.quotedColumnsList(tableInfo.PrimaryKey)
 
 	// Get all primary keys from target
-	targetQuery := fmt.Sprintf("SELECT %s FROM %s", pkCols, s.quotedTableName(tableInfo.Name))
+	targetQuery := fmt.Sprintf("SELECT %s FROM %s", pkCols, s.quotedTableName(tableInfo.Name)) //nolint:gosec // G201 - table/column names are safely quoted
 	targetRows, err := s.targetDB.QueryContext(ctx, targetQuery)
 	if err != nil {
 		return fmt.Errorf("failed to query target primary keys: %w", err)
@@ -352,7 +353,7 @@ func (s *Syncer) handleMissingRows(ctx context.Context, tableInfo *table.Info) e
 	}
 
 	// Get all primary keys from source and identify missing rows
-	sourceQuery := fmt.Sprintf("SELECT %s FROM %s", pkCols, s.quotedTableName(tableInfo.Name))
+	sourceQuery := fmt.Sprintf("SELECT %s FROM %s", pkCols, s.quotedTableName(tableInfo.Name)) //nolint:gosec // G201 - table/column names are safely quoted
 	sourceRows, err := s.sourceDB.QueryContext(ctx, sourceQuery)
 	if err != nil {
 		return fmt.Errorf("failed to query source primary keys: %w", err)
@@ -434,7 +435,7 @@ func (s *Syncer) getRowsByPKValues(ctx context.Context, tableInfo *table.Info, p
 		conditions = append(conditions, "("+strings.Join(pkConds, " AND ")+")")
 	}
 
-	query := fmt.Sprintf("SELECT %s FROM %s WHERE %s",
+	query := fmt.Sprintf("SELECT %s FROM %s WHERE %s", //nolint:gosec // G201 - table/column names are safely quoted
 		columns,
 		s.quotedTableName(tableInfo.Name),
 		strings.Join(conditions, " OR "),

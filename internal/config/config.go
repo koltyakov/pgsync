@@ -1,3 +1,4 @@
+// Package config handles application configuration loading, validation, and persistence.
 package config
 
 import (
@@ -65,12 +66,13 @@ func (c *Config) Validate() error {
 	}
 
 	// Validate and clamp BatchSize to safe bounds
-	if c.BatchSize <= 0 {
+	switch {
+	case c.BatchSize <= 0:
 		c.BatchSize = constants.DefaultBatchSize
-	} else if c.BatchSize > constants.MaxBatchSize {
+	case c.BatchSize > constants.MaxBatchSize:
 		return fmt.Errorf("batchSize value %d exceeds maximum %d: reduce batch size to prevent memory exhaustion",
 			c.BatchSize, constants.MaxBatchSize)
-	} else if c.BatchSize < constants.MinBatchSize {
+	case c.BatchSize < constants.MinBatchSize:
 		c.BatchSize = constants.MinBatchSize // Silently upgrade tiny batches
 	}
 
@@ -102,7 +104,7 @@ func (c *Config) Validate() error {
 
 // LoadFromFile loads configuration from a JSON file
 func LoadFromFile(path string, cfg *Config) error {
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(path) //nolint:gosec // G304 - path is user-provided configuration file
 	if err != nil {
 		return fmt.Errorf("failed to read config file: %w", err)
 	}
@@ -121,5 +123,5 @@ func (c *Config) SaveToFile(path string) error {
 		return err
 	}
 
-	return os.WriteFile(path, data, 0644)
+	return os.WriteFile(path, data, 0600) //nolint:gosec // G703 - path is user-provided
 }

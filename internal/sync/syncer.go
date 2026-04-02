@@ -1,4 +1,4 @@
-package sync
+package sync //nolint:revive // intentionally shadows stdlib sync
 
 import (
 	"database/sql"
@@ -9,7 +9,7 @@ import (
 
 	"github.com/koltyakov/pgsync/internal/config"
 	"github.com/koltyakov/pgsync/internal/db"
-	_ "github.com/lib/pq"
+	_ "github.com/lib/pq" // PostgreSQL driver registration
 )
 
 // Syncer handles the synchronization between two PostgreSQL databases

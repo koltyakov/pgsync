@@ -53,9 +53,7 @@ func (i *Inspector) GetTables(ctx context.Context) ([]string, error) {
 		return nil, fmt.Errorf("failed to query tables: %w", err)
 	}
 	defer func() {
-		if closeErr := rows.Close(); closeErr != nil {
-			// Log but don't fail - we already have the data
-		}
+		_ = rows.Close()
 	}()
 
 	var tables []string

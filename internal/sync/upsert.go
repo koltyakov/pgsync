@@ -1,4 +1,4 @@
-package sync
+package sync //nolint:revive // intentionally shadows stdlib sync
 
 import (
 	"context"
@@ -150,6 +150,7 @@ func (s *Syncer) upsertDataWithCopy(ctx context.Context, tableInfo *table.Info, 
 	}
 	updateClause := strings.Join(updateParts, ", ")
 
+	//nolint:gosec // G201 - table/column names are safely quoted
 	mergeSQL := fmt.Sprintf(`
 		INSERT INTO %s (%s)
 		SELECT %s FROM %s

@@ -146,7 +146,7 @@ func (s *Server) Start(ctx context.Context) error {
 	webDist, err := webui.GetWebFS()
 	if err != nil {
 		s.logger.Warn("No embedded frontend found, serving API only", "error", err)
-		mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		mux.HandleFunc("/", func(w http.ResponseWriter, _ *http.Request) {
 			w.Header().Set("Content-Type", "text/html")
 			_, _ = fmt.Fprint(w, `<!DOCTYPE html><html><head><title>pgsync</title></head><body>
 				<h1>pgsync Web UI</h1>
@@ -185,7 +185,7 @@ func (s *Server) Start(ctx context.Context) error {
 	// Graceful shutdown
 	go func() {
 		<-ctx.Done()
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
+		shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), shutdownTimeout)
 		defer cancel()
 		if err := server.Shutdown(shutdownCtx); err != nil {
 			s.logger.Warn("Error during server shutdown", "error", err)

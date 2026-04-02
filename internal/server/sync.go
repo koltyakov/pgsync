@@ -155,6 +155,7 @@ func (s *Server) runSync(parentCtx context.Context, req SyncRequest) {
 
 	// Run sync with a context that cancels on server shutdown
 	ctx, cancel := context.WithCancel(parentCtx)
+	defer cancel()
 	s.mu.Lock()
 	s.syncCancel = cancel
 	s.mu.Unlock()
@@ -261,7 +262,7 @@ func (h *webProgressHandler) OnTableStart(table string, index int) {
 	})
 }
 
-func (h *webProgressHandler) OnPartialSync(table string, syncingCols, ignoredCols []string, reason string) {
+func (h *webProgressHandler) OnPartialSync(table string, _, ignoredCols []string, reason string) {
 	var colsInfo string
 	if len(ignoredCols) > 5 {
 		colsInfo = fmt.Sprintf("%d columns", len(ignoredCols))

@@ -1,4 +1,4 @@
-package sync
+package sync //nolint:revive // intentionally shadows stdlib sync
 
 import (
 	"context"
@@ -75,6 +75,7 @@ func (s *Syncer) syncTableReconcile(ctx context.Context, tableInfo *table.Info) 
 // Returns a map of PK string -> slice of actual PK values
 func (s *Syncer) getAllPrimaryKeys(ctx context.Context, db *sql.DB, tableInfo *table.Info) (map[string][]any, error) {
 	pkColumns := s.quotedColumnsList(tableInfo.PrimaryKey)
+	//nolint:gosec // G201 - table/column names are safely quoted
 	query := fmt.Sprintf("SELECT %s FROM %s", pkColumns, s.quotedTableName(tableInfo.Name))
 
 	rows, err := db.QueryContext(ctx, query)
@@ -206,6 +207,7 @@ func (s *Syncer) getRowsByPK(ctx context.Context, db *sql.DB, tableInfo *table.I
 		conditions = append(conditions, "("+strings.Join(pkConds, " AND ")+")")
 	}
 
+	//nolint:gosec // G201 - table/column names are safely quoted and values remain parameterized
 	query := fmt.Sprintf("SELECT %s FROM %s WHERE %s",
 		columns,
 		s.quotedTableName(tableInfo.Name),

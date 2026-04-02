@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"github.com/koltyakov/pgsync/internal/db"
-	_ "github.com/lib/pq"
+	_ "github.com/lib/pq" // PostgreSQL driver registration
 )
 
 // TableInfo represents table metadata for the UI
@@ -253,7 +253,7 @@ func (s *Server) getForeignKeyColumns(ctx context.Context, db *sql.DB, tableName
 			AND tc.table_schema = $1
 			AND tc.table_name = $2`
 
-	rows, err := db.QueryContext(ctx, query, s.schema, tableName)
+	rows, err := db.QueryContext(ctx, query, s.schema, tableName) //nolint:gosec // G701 - query uses parameterized $1/$2 placeholders
 	if err != nil {
 		return nil, err
 	}

@@ -1,4 +1,4 @@
-package sync
+package sync //nolint:revive // intentionally shadows stdlib sync
 
 // ProgressHandler receives progress updates during sync operations
 type ProgressHandler interface {
@@ -33,10 +33,9 @@ type Stats struct {
 // noopProgressHandler is used when no progress handler is provided
 type noopProgressHandler struct{}
 
-func (h *noopProgressHandler) OnStart(tables []string)              {}
-func (h *noopProgressHandler) OnTableStart(table string, index int) {}
-func (h *noopProgressHandler) OnPartialSync(table string, syncingCols, ignoredCols []string, reason string) {
-}
-func (h *noopProgressHandler) OnTableComplete(table string, upserts, deletes int64) {}
-func (h *noopProgressHandler) OnLog(level, message string)                          {}
-func (h *noopProgressHandler) OnComplete(totalUpserts, totalDeletes int64)          {}
+func (h *noopProgressHandler) OnStart(_ []string)                              {}
+func (h *noopProgressHandler) OnTableStart(_ string, _ int)                    {}
+func (h *noopProgressHandler) OnPartialSync(_ string, _, _ []string, _ string) {}
+func (h *noopProgressHandler) OnTableComplete(_ string, _, _ int64)            {}
+func (h *noopProgressHandler) OnLog(_, _ string)                               {}
+func (h *noopProgressHandler) OnComplete(_, _ int64)                           {}

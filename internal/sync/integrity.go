@@ -1,4 +1,4 @@
-package sync
+package sync //nolint:revive // intentionally shadows stdlib sync
 
 import (
 	"context"
@@ -152,6 +152,7 @@ func (s *Syncer) getExactRowCount(ctx context.Context, dbh *sql.DB, tableName st
 		return 0, fmt.Errorf("database connection is nil")
 	}
 
+	//nolint:gosec // G201 - table name is safely quoted
 	query := fmt.Sprintf("SELECT COUNT(*) FROM %s", s.quotedTableName(tableName))
 	var cnt int64
 	if err := dbh.QueryRowContext(ctx, query).Scan(&cnt); err != nil {
@@ -167,6 +168,7 @@ func (s *Syncer) getMinMaxAsText(ctx context.Context, dbh *sql.DB, tableName, co
 		return "", "", fmt.Errorf("database connection is nil")
 	}
 
+	//nolint:gosec // G201 - table/column names are safely quoted
 	query := fmt.Sprintf("SELECT MIN((%s)::text), MAX((%s)::text) FROM %s",
 		s.quotedColumnName(column), s.quotedColumnName(column), s.quotedTableName(tableName))
 	var minVal, maxVal sql.NullString

@@ -33,16 +33,17 @@ const (
 )
 
 func main() {
-	// NASA-grade: recover from any panic to ensure clean shutdown
-	defer func() {
-		if r := recover(); r != nil {
-			fmt.Fprintf(os.Stderr, "FATAL: Unrecovered panic: %v\n", r)
-			fmt.Fprintf(os.Stderr, "Stack trace:\n%s\n", debug.Stack())
-			os.Exit(exitError)
-		}
+	exitCode := func() (code int) {
+		defer func() {
+			if r := recover(); r != nil {
+				fmt.Fprintf(os.Stderr, "FATAL: Unrecovered panic: %v\n", r) //nolint:gosec // G705 - stderr is not user-facing HTML
+				fmt.Fprintf(os.Stderr, "Stack trace:\n%s\n", debug.Stack())
+				code = exitError
+			}
+		}()
+		return run()
 	}()
-
-	os.Exit(run())
+	os.Exit(exitCode)
 }
 
 // run contains the main application logic, separated for testability.
@@ -108,7 +109,7 @@ func run() int {
 	if *serverMode {
 		if cfg.SourceDB == "" || cfg.TargetDB == "" {
 			fmt.Fprintf(os.Stderr, "Server mode requires -source and -target database connection strings\n")
-			fmt.Fprintf(os.Stderr, "Usage: %s -server -source <source_db> -target <target_db> [-port 8080]\n", os.Args[0])
+			fmt.Fprintf(os.Stderr, "Usage: %s -server -source <source_db> -target <target_db> [-port 8080]\n", os.Args[0]) //nolint:gosec // G705 - stderr output
 			return exitError
 		}
 
@@ -145,8 +146,8 @@ func run() int {
 	// Validate and apply defaults
 	if err := cfg.Validate(); err != nil {
 		fmt.Fprintf(os.Stderr, "Configuration error: %v\n", err)
-		fmt.Fprintf(os.Stderr, "Usage: %s -source <source_db> -target <target_db> [options]\n", os.Args[0])
-		fmt.Fprintf(os.Stderr, "Or use: %s -config <config_file>\n", os.Args[0])
+		fmt.Fprintf(os.Stderr, "Usage: %s -source <source_db> -target <target_db> [options]\n", os.Args[0]) //nolint:gosec // G705 - stderr output
+		fmt.Fprintf(os.Stderr, "Or use: %s -config <config_file>\n", os.Args[0])                            //nolint:gosec // G705 - stderr output
 		flag.PrintDefaults()
 		return exitError
 	}

@@ -1,4 +1,4 @@
-package sync
+package sync //nolint:revive // intentionally shadows stdlib sync
 
 import (
 	"context"
@@ -95,9 +95,10 @@ func (s *Syncer) syncTableIncremental(ctx context.Context, tableInfo *table.Info
 
 // getTimestampRange gets the range of timestamps to process
 func (s *Syncer) getTimestampRange(ctx context.Context, tableName string, lastSync time.Time) (time.Time, time.Time, error) {
+	//nolint:gosec // G201 - table/column names are safely quoted
 	query := fmt.Sprintf(`
-		SELECT MIN(%s) as min_ts, MAX(%s) as max_ts 
-		FROM %s 
+		SELECT MIN(%s) as min_ts, MAX(%s) as max_ts
+		FROM %s
 		WHERE %s > $1`,
 		s.quotedColumnName(s.cfg.TimestampCol), s.quotedColumnName(s.cfg.TimestampCol),
 		s.quotedTableName(tableName), s.quotedColumnName(s.cfg.TimestampCol))
@@ -117,6 +118,7 @@ func (s *Syncer) getTimestampRange(ctx context.Context, tableName string, lastSy
 
 // getMaxTimestampFromTarget gets the maximum timestamp from target table
 func (s *Syncer) getMaxTimestampFromTarget(ctx context.Context, tableName string) (time.Time, error) {
+	//nolint:gosec // G201 - table/column names are safely quoted
 	query := fmt.Sprintf(`
 		SELECT COALESCE(MAX(%s), '1970-01-01'::timestamp) 
 		FROM %s`,
@@ -130,28 +132,6 @@ func (s *Syncer) getMaxTimestampFromTarget(ctx context.Context, tableName string
 			return time.Time{}, nil
 		}
 		return time.Time{}, fmt.Errorf("failed to get max timestamp from target %s: %w", tableName, err)
-	}
-
-	// If the result is the epoch time (1970-01-01), treat it as zero
-	epoch := time.Date(1970, 1, 1, 0, 0, 0, 0, time.UTC)
-	if maxTS.Equal(epoch) {
-		return time.Time{}, nil
-	}
-
-	return maxTS, nil
-}
-
-// getSourceMaxTimestamp gets the maximum timestamp from source table
-func (s *Syncer) getSourceMaxTimestamp(ctx context.Context, tableName string) (time.Time, error) {
-	query := fmt.Sprintf(`
-		SELECT COALESCE(MAX(%s), '1970-01-01'::timestamp) 
-		FROM %s`,
-		s.quotedColumnName(s.cfg.TimestampCol), s.quotedTableName(tableName))
-
-	var maxTS time.Time
-	err := s.sourceDB.QueryRowContext(ctx, query).Scan(&maxTS)
-	if err != nil {
-		return time.Time{}, fmt.Errorf("failed to get max timestamp from source %s: %w", tableName, err)
 	}
 
 	// If the result is the epoch time (1970-01-01), treat it as zero
@@ -196,6 +176,7 @@ func (s *Syncer) processBatch(ctx context.Context, tableInfo *table.Info, fromTS
 
 // calculateBatchEndTimestamp calculates the end timestamp for the current batch
 func (s *Syncer) calculateBatchEndTimestamp(ctx context.Context, tableInfo *table.Info, fromTS, maxTS time.Time) time.Time {
+	//nolint:gosec // G201 - table/column names are safely quoted
 	query := fmt.Sprintf(`
 		SELECT %s 
 		FROM %s 
@@ -236,7 +217,8 @@ func (s *Syncer) calculateBatchEndTimestamp(ctx context.Context, tableInfo *tabl
 }
 
 // getActualBatchEndTimestamp ensures we include all rows with the same timestamp
-func (s *Syncer) getActualBatchEndTimestamp(ctx context.Context, tableInfo *table.Info, fromTS, batchEndTS time.Time) (time.Time, error) {
+func (s *Syncer) getActualBatchEndTimestamp(ctx context.Context, tableInfo *table.Info, _, batchEndTS time.Time) (time.Time, error) { //nolint:unparam // error kept for API consistency
+	//nolint:gosec // G201 - table/column names are safely quoted
 	query := fmt.Sprintf(`
 		SELECT MIN(%s) 
 		FROM %s 
@@ -261,6 +243,7 @@ func (s *Syncer) getActualBatchEndTimestamp(ctx context.Context, tableInfo *tabl
 // getSourceData retrieves data from source table within timestamp range
 func (s *Syncer) getSourceData(ctx context.Context, tableInfo *table.Info, fromTS, toTS time.Time) ([][]any, error) {
 	columns := s.quotedColumnsList(tableInfo.Columns)
+	//nolint:gosec // G201 - table/column names are safely quoted
 	query := fmt.Sprintf(`
 		SELECT %s 
 		FROM %s 
@@ -300,6 +283,7 @@ func (s *Syncer) getSourceData(ctx context.Context, tableInfo *table.Info, fromT
 
 // tableHasRows checks if a table has at least one row
 func (s *Syncer) tableHasRows(ctx context.Context, dbh *sql.DB, tableName string) (bool, error) {
+	//nolint:gosec // G201 - table name is safely quoted
 	query := fmt.Sprintf("SELECT EXISTS (SELECT 1 FROM %s LIMIT 1)", s.quotedTableName(tableName))
 	var exists bool
 	if err := dbh.QueryRowContext(ctx, query).Scan(&exists); err != nil {

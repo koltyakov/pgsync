@@ -8,6 +8,7 @@ import (
 
 func TestLoadFromFile(t *testing.T) {
 	// Create a temporary config file
+	//nolint:gosec // G101 - test credentials
 	configContent := `{
 		"sourceDb": "postgres://test:test@localhost:5432/source",
 		"targetDb": "postgres://test:test@localhost:5432/target",
@@ -25,7 +26,7 @@ func TestLoadFromFile(t *testing.T) {
 		t.Fatalf("Failed to create temp file: %v", err)
 	}
 	defer func() {
-		if err := os.Remove(tmpFile.Name()); err != nil {
+		if err := os.Remove(tmpFile.Name()); err != nil { //nolint:gosec // G703 - test file cleanup
 			t.Logf("Failed to remove temp file: %v", err)
 		}
 	}()
@@ -45,6 +46,7 @@ func TestLoadFromFile(t *testing.T) {
 	}
 
 	// Verify loaded values
+	//nolint:gosec // G101 - test credentials
 	expected := &Config{
 		SourceDB:      "postgres://test:test@localhost:5432/source",
 		TargetDB:      "postgres://test:test@localhost:5432/target",
@@ -63,6 +65,7 @@ func TestLoadFromFile(t *testing.T) {
 }
 
 func TestSaveToFile(t *testing.T) {
+	//nolint:gosec // G101 - test credentials
 	cfg := &Config{
 		SourceDB:      "postgres://test:test@localhost:5432/source",
 		TargetDB:      "postgres://test:test@localhost:5432/target",
@@ -80,7 +83,7 @@ func TestSaveToFile(t *testing.T) {
 		t.Fatalf("Failed to create temp file: %v", err)
 	}
 	defer func() {
-		if err := os.Remove(tmpFile.Name()); err != nil {
+		if err := os.Remove(tmpFile.Name()); err != nil { //nolint:gosec // G703 - test file cleanup
 			t.Logf("Failed to remove temp file: %v", err)
 		}
 	}()
@@ -298,7 +301,7 @@ func TestLoadFromFileInvalidJSON(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create temp file: %v", err)
 	}
-	defer func() { _ = os.Remove(tmpFile.Name()) }()
+	defer func() { _ = os.Remove(tmpFile.Name()) }() //nolint:gosec // G703 - test file cleanup
 
 	if _, err := tmpFile.WriteString("{invalid json}"); err != nil {
 		t.Fatalf("Failed to write to temp file: %v", err)
