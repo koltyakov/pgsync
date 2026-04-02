@@ -55,6 +55,7 @@ snapshot:
 changelog:
   sort: asc
   use: github
+  format: "{{ .SHA }}: {{ .Message }}{{ with .Author.Username }} (@{{ . }}){{ end }}"
   filters:
     exclude:
       - '^docs:'
