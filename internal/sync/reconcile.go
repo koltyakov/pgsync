@@ -199,7 +199,7 @@ func (s *Syncer) getRowsByPK(ctx context.Context, db *sql.DB, tableInfo *table.I
 	for _, pk := range pkValues {
 		var pkConds []string
 		for i, col := range tableInfo.PrimaryKey {
-			pkConds = append(pkConds, fmt.Sprintf(`"%s" = $%d`, col, argIdx))
+			pkConds = append(pkConds, fmt.Sprintf("%s = $%d", s.quotedColumnName(col), argIdx))
 			args = append(args, pk[i])
 			argIdx++
 		}

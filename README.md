@@ -84,9 +84,9 @@ Create `config.json` to store flags you use often:
 
 Supports standard shell-style patterns (matched with Go `filepath.Match`):
 
-- `*` — any sequence of characters
-- `?` — any single character
-- `[set]` / `[range]` — character sets and ranges
+- `*` - any sequence of characters
+- `?` - any single character
+- `[set]` / `[range]` - character sets and ranges
 
 Examples: `user_*`, `*_log`, `temp_???`, `audit_[0-9]*`.
 
@@ -122,7 +122,7 @@ Reconcile mode:
 - Compares all primary keys between source and target
 - Finds rows missing in target and inserts them
 - Finds rows in target that don't exist in source and deletes them
-- Ignores timestamps entirely — useful when timestamp-based sync misses changes
+- Ignores timestamps entirely - useful when timestamp-based sync misses changes
 
 Use reconcile mode when:
 
@@ -175,4 +175,4 @@ Details:
 
 ## License
 
-MIT — see [LICENSE](./LICENSE).
+MIT - see [LICENSE](./LICENSE).
