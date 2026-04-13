@@ -105,11 +105,11 @@ func TestGetTableInfo(t *testing.T) {
 	t.Run("returns complete table info", func(t *testing.T) {
 		// Note: GetTableInfo runs queries concurrently, so we use AnyOrder mode
 		// Mock columns query
-		colRows := sqlmock.NewRows([]string{"column_name"}).
-			AddRow("id").
-			AddRow("name").
-			AddRow("email")
-		mock.ExpectQuery("SELECT column_name FROM information_schema.columns").
+		colRows := sqlmock.NewRows([]string{"column_name", "data_type"}).
+			AddRow("id", "integer").
+			AddRow("name", "text").
+			AddRow("email", "text")
+		mock.ExpectQuery("SELECT column_name, data_type FROM information_schema.columns").
 			WithArgs("public", "users").
 			WillReturnRows(colRows)
 

@@ -1,4 +1,4 @@
-package sync //nolint:revive // intentionally shadows stdlib sync
+package syncer
 
 import (
 	"context"
@@ -11,34 +11,38 @@ import (
 	"github.com/koltyakov/pgsync/internal/table"
 )
 
-const integrityFileName = "integrity.csv"
+const defaultIntegrityFileName = "integrity.csv"
 
-// writeIntegrityCSV writes integrity stats for each table into integrity.csv.
-// This provides a comprehensive post-sync verification report comparing
-// row counts, ID ranges, and timestamp ranges between source and target.
-//
-// Output file: integrity.csv in current working directory.
-// If file exists, it will be overwritten.
+func (s *Syncer) integrityPath() string {
+	if s.cfg.IntegrityPath != "" {
+		return s.cfg.IntegrityPath
+	}
+	return defaultIntegrityFileName
+}
+
+// writeIntegrityCSV writes integrity stats for each table into a CSV file.
+// The output path defaults to "integrity.csv" in the current working directory
+// and can be configured via the IntegrityPath config option.
+// If the file exists, it will be overwritten.
 func (s *Syncer) writeIntegrityCSV(ctx context.Context, tables []*table.Info) error {
 	// Defensive: validate input
 	if tables == nil {
 		return fmt.Errorf("tables slice is nil")
 	}
 
-	// Create file in current working directory
-	f, err := os.Create(integrityFileName)
+	integrityPath := s.integrityPath()
+	f, err := os.Create(integrityPath) //nolint:gosec // G304 - path is from user config
 	if err != nil {
-		return fmt.Errorf("failed to create %s: %w", integrityFileName, err)
+		return fmt.Errorf("failed to create %s: %w", integrityPath, err)
 	}
 
-	// Ensure file is closed and synced even on error
 	var closeErr error
 	defer func() {
 		if syncErr := f.Sync(); syncErr != nil && closeErr == nil {
-			closeErr = fmt.Errorf("failed to sync %s: %w", integrityFileName, syncErr)
+			closeErr = fmt.Errorf("failed to sync %s: %w", integrityPath, syncErr)
 		}
 		if err := f.Close(); err != nil && closeErr == nil {
-			closeErr = fmt.Errorf("failed to close %s: %w", integrityFileName, err)
+			closeErr = fmt.Errorf("failed to close %s: %w", integrityPath, err)
 		}
 	}()
 

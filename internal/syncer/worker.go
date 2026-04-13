@@ -1,13 +1,13 @@
-package sync //nolint:revive // intentionally shadows stdlib sync
+package syncer
 
 import (
 	"context"
 	"fmt"
-	"log/slog"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
-	gosync "sync"
+	"sync"
 	"time"
 
 	"github.com/koltyakov/pgsync/internal/db"
@@ -49,12 +49,17 @@ func (s *Syncer) Sync(ctx context.Context) error {
 
 	// Sort tables by dependency order (parents first, then children)
 	sortedTables := topologicalSort(tables, deps, tableSet)
-	s.logger.Debug("Tables sorted by dependency order", "order", strings.Join(sortedTables, " -> "))
+	s.logger.Debug("Tables sorted by dependency order", "order", strings.Join(sortedTables.Tables, " -> "))
+
+	if len(sortedTables.CycleTables) > 0 {
+		s.logger.Warn("Circular FK dependencies detected - tables appended in arbitrary order, FK violations may occur",
+			"cycleTables", strings.Join(sortedTables.CycleTables, ", "))
+	}
 
 	// Get table metadata for all tables (in sorted order)
 	// Also check target existence and filter columns
-	tableInfos := make([]*table.Info, 0, len(sortedTables))
-	for _, tableName := range sortedTables {
+	tableInfos := make([]*table.Info, 0, len(sortedTables.Tables))
+	for _, tableName := range sortedTables.Tables {
 		// Check if table exists in target
 		existsInTarget, err := s.inspector.TableExistsInTarget(ctx, tableName)
 		if err != nil {
@@ -167,9 +172,9 @@ func (s *Syncer) Sync(ctx context.Context) error {
 	// Post-sync integrity check and CSV export (optional)
 	if s.cfg.Integrity {
 		if err := s.writeIntegrityCSV(ctx, tableInfos); err != nil {
-			s.logger.Warn("Failed to write integrity.csv", "error", err)
+			s.logger.Warn("Failed to write integrity report", "error", err)
 		} else {
-			s.logger.Info("Integrity report written to integrity.csv")
+			s.logger.Info("Integrity report written", "path", "integrity.csv")
 		}
 	}
 	return nil
@@ -189,7 +194,7 @@ func (s *Syncer) syncLevel(ctx context.Context, tableInfos []*table.Info) error 
 
 	workChan := make(chan tableWork, len(tableInfos))
 	errChan := make(chan error, len(tableInfos))
-	var wg gosync.WaitGroup
+	var wg sync.WaitGroup
 
 	// Start worker goroutines
 	for i := 0; i < numWorkers; i++ {
@@ -295,10 +300,15 @@ func findIgnoredColumns(original, syncing []string) []string {
 	return ignored
 }
 
+type topoSortResult struct {
+	Tables      []string
+	CycleTables []string
+}
+
 // topologicalSort sorts tables so that parent tables come before children (FK dependencies)
-func topologicalSort(tables []string, deps []db.TableDependency, tableSet map[string]struct{}) []string {
+func topologicalSort(tables []string, deps []db.TableDependency, tableSet map[string]struct{}) topoSortResult {
 	if len(deps) == 0 {
-		return tables
+		return topoSortResult{Tables: tables}
 	}
 
 	// Build adjacency list (table -> tables it depends on)
@@ -356,7 +366,7 @@ func topologicalSort(tables []string, deps []db.TableDependency, tableSet map[st
 		}
 	}
 
-	// If we couldn't sort all tables, there might be a cycle - add remaining tables
+	var cycleTables []string
 	if len(sorted) < len(tables) {
 		sortedSet := make(map[string]bool)
 		for _, t := range sorted {
@@ -365,11 +375,12 @@ func topologicalSort(tables []string, deps []db.TableDependency, tableSet map[st
 		for _, t := range tables {
 			if !sortedSet[t] {
 				sorted = append(sorted, t)
+				cycleTables = append(cycleTables, t)
 			}
 		}
 	}
 
-	return sorted
+	return topoSortResult{Tables: sorted, CycleTables: cycleTables}
 }
 
 // groupByDependencyLevel groups tables into levels where tables in the same level
@@ -522,16 +533,16 @@ func formatHumanDuration(d time.Duration) string {
 
 	parts := make([]string, 0, 4)
 	if h > 0 {
-		parts = append(parts, slog.Int64("h", h).Value.String()+"h")
+		parts = append(parts, strconv.FormatInt(h, 10)+"h")
 	}
 	if m > 0 {
-		parts = append(parts, slog.Int64("m", m).Value.String()+"m")
+		parts = append(parts, strconv.FormatInt(m, 10)+"m")
 	}
 	if h > 0 || m > 0 || sec > 0 {
-		parts = append(parts, slog.Int64("s", sec).Value.String()+"s")
+		parts = append(parts, strconv.FormatInt(sec, 10)+"s")
 	}
 	if ms > 0 {
-		parts = append(parts, slog.Int64("ms", ms).Value.String()+"ms")
+		parts = append(parts, strconv.FormatInt(ms, 10)+"ms")
 	}
 	if len(parts) == 0 {
 		return "0ms"

@@ -11,7 +11,7 @@ import (
 	"time"
 
 	"github.com/koltyakov/pgsync/internal/config"
-	"github.com/koltyakov/pgsync/internal/sync"
+	"github.com/koltyakov/pgsync/internal/syncer"
 )
 
 // SyncRequest contains the sync configuration from the UI
@@ -146,12 +146,12 @@ func (s *Server) runSync(parentCtx context.Context, req SyncRequest) {
 	}
 
 	// Create syncer with progress callback
-	syncer, err := sync.NewWithProgress(cfg, progressHandler)
+	syncInstance, err := syncer.NewWithProgress(cfg, progressHandler)
 	if err != nil {
 		s.syncError(fmt.Errorf("failed to create syncer: %w", err))
 		return
 	}
-	defer func() { _ = syncer.Close() }()
+	defer func() { _ = syncInstance.Close() }()
 
 	// Run sync with a context that cancels on server shutdown
 	ctx, cancel := context.WithCancel(parentCtx)
@@ -165,7 +165,7 @@ func (s *Server) runSync(parentCtx context.Context, req SyncRequest) {
 		s.mu.Unlock()
 	}()
 
-	if err := syncer.Sync(ctx); err != nil {
+	if err := syncInstance.Sync(ctx); err != nil {
 		// Don't report context cancellation as an error if server is shutting down
 		if ctx.Err() != nil && parentCtx.Err() != nil {
 			return
@@ -181,7 +181,7 @@ func (s *Server) runSync(parentCtx context.Context, req SyncRequest) {
 	s.syncState.Progress = 100
 	s.mu.Unlock()
 
-	stats := syncer.GetStats()
+	stats := syncInstance.GetStats()
 	s.broadcast(ProgressMessage{
 		Type:     "complete",
 		Message:  "Sync completed successfully",
@@ -217,7 +217,7 @@ func (s *Server) syncError(err error) {
 	})
 }
 
-// webProgressHandler implements sync.ProgressHandler for WebSocket updates
+// webProgressHandler implements syncer.ProgressHandler for WebSocket updates
 type webProgressHandler struct {
 	server      *Server
 	totalTables int

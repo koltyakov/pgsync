@@ -91,17 +91,18 @@ func (i *Inspector) GetTableInfo(ctx context.Context, tableName string) (*table.
 		Schema: i.schema,
 	}
 
-	// Run queries concurrently for better performance
 	var wg sync.WaitGroup
 	var columnsErr, pkErr, countErr error
-	var columns, primaryKey []string
+	var columns []string
+	var dataTypes []string
+	var primaryKey []string
 	var rowCount int64
 
 	wg.Add(3)
 
 	go func() {
 		defer wg.Done()
-		columns, columnsErr = i.getColumns(ctx, tableName)
+		columns, dataTypes, columnsErr = i.getColumns(ctx, tableName)
 	}()
 
 	go func() {
@@ -114,7 +115,17 @@ func (i *Inspector) GetTableInfo(ctx context.Context, tableName string) (*table.
 		rowCount, countErr = i.getRowCount(ctx, tableName)
 	}()
 
-	wg.Wait()
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
 
 	// Check context first - if canceled, return early without detailed errors
 	if ctx.Err() != nil {
@@ -133,6 +144,7 @@ func (i *Inspector) GetTableInfo(ctx context.Context, tableName string) (*table.
 	}
 
 	info.Columns = columns
+	info.DataTypes = dataTypes
 	info.PrimaryKey = primaryKey
 	info.RowCount = rowCount
 
@@ -140,35 +152,37 @@ func (i *Inspector) GetTableInfo(ctx context.Context, tableName string) (*table.
 }
 
 // getColumns returns all columns for a table
-func (i *Inspector) getColumns(ctx context.Context, tableName string) ([]string, error) {
+func (i *Inspector) getColumns(ctx context.Context, tableName string) ([]string, []string, error) {
 	query := `
-		SELECT column_name 
-		FROM information_schema.columns 
-		WHERE table_schema = $1 AND table_name = $2 
+		SELECT column_name, data_type
+		FROM information_schema.columns
+		WHERE table_schema = $1 AND table_name = $2
 		ORDER BY ordinal_position`
 
 	rows, err := i.sourceDB.QueryContext(ctx, query, i.schema, tableName)
 	if err != nil {
-		return nil, fmt.Errorf("failed to query columns: %w", err)
+		return nil, nil, fmt.Errorf("failed to query columns: %w", err)
 	}
 	defer func() {
 		_ = rows.Close()
 	}()
 
 	var columns []string
+	var dataTypes []string
 	for rows.Next() {
-		var columnName string
-		if err := rows.Scan(&columnName); err != nil {
-			return nil, fmt.Errorf("failed to scan column name: %w", err)
+		var colName, dataType string
+		if err := rows.Scan(&colName, &dataType); err != nil {
+			return nil, nil, fmt.Errorf("failed to scan column: %w", err)
 		}
-		columns = append(columns, columnName)
+		columns = append(columns, colName)
+		dataTypes = append(dataTypes, dataType)
 	}
 
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("error iterating columns: %w", err)
+		return nil, nil, fmt.Errorf("error iterating columns: %w", err)
 	}
 
-	return columns, nil
+	return columns, dataTypes, nil
 }
 
 // getPrimaryKey returns primary key columns for a table

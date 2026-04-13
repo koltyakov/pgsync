@@ -1,7 +1,8 @@
-package sync //nolint:revive // intentionally shadows stdlib sync
+package syncer
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"reflect"
 
@@ -33,7 +34,7 @@ func (s *Syncer) syncTableFullSmall(ctx context.Context, tableInfo *table.Info) 
 	}
 
 	// Fetch all rows from source and target
-	srcRows, err := s.getAllSourceData(ctx, tableInfo)
+	srcRows, err := s.fetchAllData(ctx, s.sourceDB, tableInfo, "source")
 	if err != nil {
 		return fmt.Errorf("failed to fetch full data from source: %w", err)
 	}
@@ -43,7 +44,7 @@ func (s *Syncer) syncTableFullSmall(ctx context.Context, tableInfo *table.Info) 
 		return fmt.Errorf("context cancelled after source fetch: %w", err)
 	}
 
-	tgtRows, err := s.getAllTargetData(ctx, tableInfo)
+	tgtRows, err := s.fetchAllData(ctx, s.targetDB, tableInfo, "target")
 	if err != nil {
 		return fmt.Errorf("failed to fetch full data from target: %w", err)
 	}
@@ -129,82 +130,31 @@ func (s *Syncer) syncTableFullSmall(ctx context.Context, tableInfo *table.Info) 
 	return nil
 }
 
-// getAllSourceData retrieves all rows for a table (no timestamp filter).
-// Returns (rows, error) where rows is a slice of column values in tableInfo.Columns order.
-// Caller must validate tableInfo is not nil and has columns.
-func (s *Syncer) getAllSourceData(ctx context.Context, tableInfo *table.Info) ([][]any, error) {
-	if s.sourceDB == nil {
-		return nil, fmt.Errorf("source database connection is nil")
+// fetchAllData retrieves all rows for a table from the given database.
+// The label parameter is used for error messages ("source" or "target").
+func (s *Syncer) fetchAllData(ctx context.Context, db *sql.DB, tableInfo *table.Info, label string) ([][]any, error) {
+	if db == nil {
+		return nil, fmt.Errorf("%s database connection is nil", label)
 	}
 
 	columns := s.quotedColumnsList(tableInfo.Columns)
 	query := fmt.Sprintf("SELECT %s FROM %s", columns, s.quotedTableName(tableInfo.Name)) //nolint:gosec // G201 - table/column names are safely quoted
 
-	rows, err := s.sourceDB.QueryContext(ctx, query)
+	rows, err := db.QueryContext(ctx, query)
 	if err != nil {
-		return nil, fmt.Errorf("failed to query source data: %w", err)
+		return nil, fmt.Errorf("failed to query %s data: %w", label, err)
 	}
 	defer func() {
 		if closeErr := rows.Close(); closeErr != nil {
-			s.logger.Warn("failed to close source rows", "table", tableInfo.Name, "error", closeErr)
+			s.logger.Warn("failed to close rows", "table", tableInfo.Name, "error", closeErr)
 		}
 	}()
 
-	// Pre-allocate with estimate to reduce allocations
 	result := make([][]any, 0, tableInfo.RowCount)
 	for rows.Next() {
-		// Check context periodically during large scans
 		if len(result)%10000 == 0 {
 			if err := ctx.Err(); err != nil {
-				return nil, fmt.Errorf("context cancelled during source scan: %w", err)
-			}
-		}
-
-		values := make([]any, len(tableInfo.Columns))
-		scanArgs := make([]any, len(tableInfo.Columns))
-		for i := range values {
-			scanArgs[i] = &values[i]
-		}
-		if err := rows.Scan(scanArgs...); err != nil {
-			return nil, fmt.Errorf("failed to scan row: %w", err)
-		}
-		result = append(result, values)
-	}
-
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("error iterating rows: %w", err)
-	}
-
-	return result, nil
-}
-
-// getAllTargetData retrieves all rows from the target table.
-// Returns (rows, error) where rows is a slice of column values in tableInfo.Columns order.
-func (s *Syncer) getAllTargetData(ctx context.Context, tableInfo *table.Info) ([][]any, error) {
-	if s.targetDB == nil {
-		return nil, fmt.Errorf("target database connection is nil")
-	}
-
-	columns := s.quotedColumnsList(tableInfo.Columns)
-	query := fmt.Sprintf("SELECT %s FROM %s", columns, s.quotedTableName(tableInfo.Name)) //nolint:gosec // G201 - table/column names are safely quoted
-
-	rows, err := s.targetDB.QueryContext(ctx, query)
-	if err != nil {
-		return nil, fmt.Errorf("failed to query target data: %w", err)
-	}
-	defer func() {
-		if closeErr := rows.Close(); closeErr != nil {
-			s.logger.Warn("failed to close target rows", "table", tableInfo.Name, "error", closeErr)
-		}
-	}()
-
-	// Pre-allocate with reasonable estimate
-	result := make([][]any, 0, tableInfo.RowCount)
-	for rows.Next() {
-		// Check context periodically during large scans
-		if len(result)%10000 == 0 {
-			if err := ctx.Err(); err != nil {
-				return nil, fmt.Errorf("context cancelled during target scan: %w", err)
+				return nil, fmt.Errorf("context cancelled during %s scan: %w", label, err)
 			}
 		}
 

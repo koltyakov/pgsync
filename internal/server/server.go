@@ -3,6 +3,7 @@ package server
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"io/fs"
 	"log/slog"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/gorilla/websocket"
 	webui "github.com/koltyakov/pgsync/web"
+	_ "github.com/lib/pq" // PostgreSQL driver registration
 )
 
 // Server timeouts - conservative values for reliability
@@ -27,10 +29,14 @@ const (
 // Server provides a web UI for pgsync.
 // It is safe for concurrent use from multiple goroutines.
 type Server struct {
-	port     int
-	sourceDB string
-	targetDB string
-	schema   string
+	port              int
+	sourceDB          string
+	targetDB          string
+	schema            string
+	corsAllowedOrigin string
+
+	sourcePool *sql.DB
+	targetPool *sql.DB
 
 	mu         sync.Mutex
 	syncState  *SyncState
@@ -75,10 +81,11 @@ type SyncStats struct {
 
 // Config holds server configuration.
 type Config struct {
-	Port     int
-	SourceDB string
-	TargetDB string
-	Schema   string
+	Port              int
+	SourceDB          string
+	TargetDB          string
+	Schema            string
+	CORSAllowedOrigin string
 }
 
 // New creates a new Server instance.
@@ -88,12 +95,34 @@ func New(cfg *Config) *Server {
 		panic("server.New: config is nil")
 	}
 
+	var sourcePool, targetPool *sql.DB
+
+	sourcePool, err := sql.Open("postgres", cfg.SourceDB)
+	if err != nil {
+		panic(fmt.Sprintf("server.New: failed to open source DB: %v", err))
+	}
+	sourcePool.SetMaxOpenConns(5)
+	sourcePool.SetMaxIdleConns(2)
+	sourcePool.SetConnMaxLifetime(5 * time.Minute)
+
+	targetPool, err = sql.Open("postgres", cfg.TargetDB)
+	if err != nil {
+		_ = sourcePool.Close()
+		panic(fmt.Sprintf("server.New: failed to open target DB: %v", err))
+	}
+	targetPool.SetMaxOpenConns(5)
+	targetPool.SetMaxIdleConns(2)
+	targetPool.SetConnMaxLifetime(5 * time.Minute)
+
 	return &Server{
-		port:     cfg.Port,
-		sourceDB: cfg.SourceDB,
-		targetDB: cfg.TargetDB,
-		schema:   cfg.Schema,
-		clients:  make(map[*websocket.Conn]bool),
+		port:              cfg.Port,
+		sourceDB:          cfg.SourceDB,
+		targetDB:          cfg.TargetDB,
+		schema:            cfg.Schema,
+		corsAllowedOrigin: cfg.CORSAllowedOrigin,
+		sourcePool:        sourcePool,
+		targetPool:        targetPool,
+		clients:           make(map[*websocket.Conn]bool),
 		upgrader: websocket.Upgrader{
 			CheckOrigin: checkWebSocketOrigin,
 		},
@@ -173,7 +202,7 @@ func (s *Server) Start(ctx context.Context) error {
 	addr := fmt.Sprintf(":%d", s.port)
 	server := &http.Server{
 		Addr:              addr,
-		Handler:           corsMiddleware(mux),
+		Handler:           s.corsMiddleware(mux),
 		ReadTimeout:       serverReadTimeout,
 		ReadHeaderTimeout: serverReadHeaderTimeout,
 		WriteTimeout:      serverWriteTimeout,
@@ -198,10 +227,24 @@ func (s *Server) Start(ctx context.Context) error {
 	return nil
 }
 
+// Close releases server resources including database connection pools
+func (s *Server) Close() {
+	if s.sourcePool != nil {
+		_ = s.sourcePool.Close()
+	}
+	if s.targetPool != nil {
+		_ = s.targetPool.Close()
+	}
+}
+
 // corsMiddleware adds CORS headers for development
-func corsMiddleware(next http.Handler) http.Handler {
+func (s *Server) corsMiddleware(next http.Handler) http.Handler {
+	origin := s.corsAllowedOrigin
+	if origin == "" {
+		origin = "*"
+	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Access-Control-Allow-Origin", origin)
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
 

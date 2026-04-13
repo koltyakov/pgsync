@@ -9,6 +9,7 @@ type Info struct {
 	Name       string   // Table name (unqualified)
 	Schema     string   // Schema name (e.g., "public")
 	Columns    []string // Column names in order as they appear in the database
+	DataTypes  []string // PostgreSQL data type names (e.g., "uuid", "text", "integer")
 	PrimaryKey []string // Primary key column names (may be empty for tables without PK)
 	RowCount   int64    // Estimated row count (may be from pg_stat or exact COUNT)
 }
@@ -80,11 +81,14 @@ func (t *Info) FilterColumns(includeColumns []string) *Info {
 		includeSet[strings.ToLower(pk)] = true
 	}
 
-	// Filter columns while preserving order and original case
 	var filtered []string
-	for _, col := range t.Columns {
+	var filteredTypes []string
+	for i, col := range t.Columns {
 		if includeSet[strings.ToLower(col)] {
 			filtered = append(filtered, col)
+			if i < len(t.DataTypes) {
+				filteredTypes = append(filteredTypes, t.DataTypes[i])
+			}
 		}
 	}
 
@@ -92,6 +96,7 @@ func (t *Info) FilterColumns(includeColumns []string) *Info {
 		Name:       t.Name,
 		Schema:     t.Schema,
 		Columns:    filtered,
+		DataTypes:  filteredTypes,
 		PrimaryKey: t.PrimaryKey,
 		RowCount:   t.RowCount,
 	}

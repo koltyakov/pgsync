@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/koltyakov/pgsync/internal/db"
-	_ "github.com/lib/pq" // PostgreSQL driver registration
 )
 
 // TableInfo represents table metadata for the UI
@@ -50,14 +49,7 @@ func (s *Server) handleGetTables(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
 
-	sourceDB, err := sql.Open("postgres", s.sourceDB)
-	if err != nil {
-		s.writeError(w, "Failed to connect to source database", err, http.StatusInternalServerError)
-		return
-	}
-	defer func() { _ = sourceDB.Close() }()
-
-	inspector := db.NewInspector(sourceDB, nil, s.schema)
+	inspector := db.NewInspector(s.sourcePool, nil, s.schema)
 	tables, err := inspector.GetTables(ctx)
 	if err != nil {
 		// Don't log context canceled as error - it's expected when client aborts request
@@ -91,21 +83,7 @@ func (s *Server) handleGetTableInfo(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
 
-	sourceDB, err := sql.Open("postgres", s.sourceDB)
-	if err != nil {
-		s.writeError(w, "Failed to connect to source database", err, http.StatusInternalServerError)
-		return
-	}
-	defer func() { _ = sourceDB.Close() }()
-
-	targetDB, err := sql.Open("postgres", s.targetDB)
-	if err != nil {
-		s.writeError(w, "Failed to connect to target database", err, http.StatusInternalServerError)
-		return
-	}
-	defer func() { _ = targetDB.Close() }()
-
-	sourceInspector := db.NewInspector(sourceDB, nil, s.schema)
+	sourceInspector := db.NewInspector(s.sourcePool, nil, s.schema)
 	info, err := sourceInspector.GetTableInfo(ctx, tableName)
 	if err != nil {
 		// Don't log context canceled as error - it's expected when client aborts request
@@ -117,7 +95,7 @@ func (s *Server) handleGetTableInfo(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Check if table exists in target and get target info
-	targetInspector := db.NewInspector(targetDB, nil, s.schema)
+	targetInspector := db.NewInspector(s.targetPool, nil, s.schema)
 	targetInfo, targetErr := targetInspector.GetTableInfo(ctx, tableName)
 	existsInTarget := targetErr == nil
 	var targetRowCount int64
@@ -131,7 +109,7 @@ func (s *Server) handleGetTableInfo(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Get detailed column info from source
-	columns, err := s.getDetailedColumns(ctx, sourceDB, tableName)
+	columns, err := s.getDetailedColumns(ctx, s.sourcePool, tableName)
 	if err != nil {
 		// Don't log context canceled as error - it's expected when client aborts request
 		if ctx.Err() != nil {

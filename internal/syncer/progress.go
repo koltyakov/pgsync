@@ -1,4 +1,4 @@
-package sync //nolint:revive // intentionally shadows stdlib sync
+package syncer
 
 // ProgressHandler receives progress updates during sync operations
 type ProgressHandler interface {

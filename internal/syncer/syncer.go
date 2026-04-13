@@ -1,11 +1,12 @@
-package sync //nolint:revive // intentionally shadows stdlib sync
+package syncer
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"log/slog"
 	"strings"
-	gosync "sync"
+	"sync"
 
 	"github.com/koltyakov/pgsync/internal/config"
 	"github.com/koltyakov/pgsync/internal/db"
@@ -18,7 +19,7 @@ type Syncer struct {
 	sourceDB       *sql.DB
 	targetDB       *sql.DB
 	inspector      *db.Inspector
-	mu             gosync.Mutex
+	mu             sync.Mutex
 	upsertsByTable map[string]int64
 	deletesByTable map[string]int64
 	totalUpserts   int64
@@ -64,14 +65,15 @@ func New(cfg *config.Config) (*Syncer, error) {
 	targetDB.SetMaxIdleConns(cfg.MaxIdleConns)
 	targetDB.SetConnMaxLifetime(cfg.ConnMaxLifetime)
 
-	// Test connections
-	if err := sourceDB.Ping(); err != nil {
+	ctx := context.Background()
+
+	if err := retry(ctx, func() error { return sourceDB.Ping() }); err != nil {
 		_ = sourceDB.Close()
 		_ = targetDB.Close()
 		return nil, fmt.Errorf("failed to ping source database: %w", err)
 	}
 
-	if err := targetDB.Ping(); err != nil {
+	if err := retry(ctx, func() error { return targetDB.Ping() }); err != nil {
 		_ = sourceDB.Close()
 		_ = targetDB.Close()
 		return nil, fmt.Errorf("failed to ping target database: %w", err)

@@ -8,5 +8,9 @@
   "batchSize": 1000,
   "includeTables": [],
   "excludeTables": ["audit_logs", "temp_*", "*_backup"],
+  "includeColumns": {
+    "users": ["id", "name", "email", "updated_at"],
+    "orders": ["id", "user_id", "total", "updated_at"]
+  },
   "verbose": false
 }

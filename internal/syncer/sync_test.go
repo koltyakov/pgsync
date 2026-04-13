@@ -1,4 +1,4 @@
-package sync //nolint:revive // intentionally shadows stdlib sync
+package syncer
 
 import (
 	"testing"
@@ -105,8 +105,8 @@ func TestMatchesPattern(t *testing.T) {
 	}
 }
 
-func TestBuildUpsertQuery(t *testing.T) {
-	syncer := &Syncer{
+func TestBuildBulkUpsertQuery(t *testing.T) {
+	s := &Syncer{
 		cfg: &config.Config{
 			Schema: "public",
 		},
@@ -115,33 +115,34 @@ func TestBuildUpsertQuery(t *testing.T) {
 	tests := []struct {
 		name     string
 		info     *table.Info
+		rows     [][]any
 		contains []string
 	}{
 		{
-			name: "single column PK",
+			name: "single column PK single row",
 			info: &table.Info{
 				Name:       "users",
 				Schema:     "public",
 				Columns:    []string{"id", "name", "email"},
 				PrimaryKey: []string{"id"},
 			},
+			rows: [][]any{{1, "Alice", "alice@example.com"}},
 			contains: []string{
 				"INSERT INTO \"public\".\"users\"",
-				"\"id\", \"name\", \"email\"",
-				"$1, $2, $3",
 				"ON CONFLICT (\"id\")",
 				"\"name\" = EXCLUDED.\"name\"",
 				"\"email\" = EXCLUDED.\"email\"",
 			},
 		},
 		{
-			name: "composite PK",
+			name: "composite PK multiple rows",
 			info: &table.Info{
 				Name:       "order_items",
 				Schema:     "public",
 				Columns:    []string{"order_id", "item_id", "quantity", "price"},
 				PrimaryKey: []string{"order_id", "item_id"},
 			},
+			rows: [][]any{{1, 1, 2, 9.99}, {1, 2, 1, 19.99}},
 			contains: []string{
 				"INSERT INTO \"public\".\"order_items\"",
 				"ON CONFLICT (\"order_id\", \"item_id\")",
@@ -153,11 +154,14 @@ func TestBuildUpsertQuery(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			query := syncer.buildUpsertQuery(tt.info)
+			query, args := s.buildBulkUpsertQuery(tt.info, tt.rows)
 			for _, substr := range tt.contains {
 				if !contains(query, substr) {
 					t.Errorf("query missing expected substring %q\nQuery: %s", substr, query)
 				}
+			}
+			if len(args) != len(tt.rows)*len(tt.info.Columns) {
+				t.Errorf("expected %d args, got %d", len(tt.rows)*len(tt.info.Columns), len(args))
 			}
 		})
 	}
@@ -452,8 +456,8 @@ func TestTopologicalSort(t *testing.T) {
 				tableSet[t] = struct{}{}
 			}
 			result := topologicalSort(tt.tables, tt.deps, tableSet)
-			if !tt.validate(result) {
-				t.Errorf("topologicalSort failed, got order: %v", result)
+			if !tt.validate(result.Tables) {
+				t.Errorf("topologicalSort failed, got order: %v", result.Tables)
 			}
 		})
 	}

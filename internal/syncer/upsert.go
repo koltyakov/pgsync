@@ -1,4 +1,4 @@
-package sync //nolint:revive // intentionally shadows stdlib sync
+package syncer
 
 import (
 	"context"
@@ -36,7 +36,6 @@ func (s *Syncer) upsertData(ctx context.Context, tableInfo *table.Info, rows [][
 		return s.upsertDataWithCopy(ctx, tableInfo, rows)
 	}
 
-	// Use transaction for batch atomicity
 	tx, err := s.targetDB.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("failed to begin transaction: %w", err)
@@ -112,10 +111,13 @@ func (s *Syncer) upsertDataWithCopy(ctx context.Context, tableInfo *table.Info, 
 	}
 
 	for _, row := range rows {
-		// Convert any byte arrays that look like UUIDs to proper UUID strings
 		convertedRow := make([]any, len(row))
 		for i, val := range row {
-			convertedRow[i] = convertForCopy(val)
+			colType := ""
+			if i < len(tableInfo.DataTypes) {
+				colType = tableInfo.DataTypes[i]
+			}
+			convertedRow[i] = convertForCopy(val, colType)
 		}
 		if _, err := stmt.ExecContext(ctx, convertedRow...); err != nil {
 			_ = stmt.Close()
@@ -239,43 +241,59 @@ func (s *Syncer) buildBulkUpsertQuery(tableInfo *table.Info, rows [][]any) (stri
 	return query, args
 }
 
-// buildUpsertQuery builds an upsert query for PostgreSQL (single row)
-func (s *Syncer) buildUpsertQuery(tableInfo *table.Info) string {
+// fetchRowsByPK fetches full rows from the given database by their primary key values
+func (s *Syncer) fetchRowsByPK(ctx context.Context, db *sql.DB, tableInfo *table.Info, pkValues [][]any) ([][]any, error) {
+	if len(pkValues) == 0 {
+		return nil, nil
+	}
+
 	columns := s.quotedColumnsList(tableInfo.Columns)
-	placeholders := make([]string, len(tableInfo.Columns))
-	for i := range placeholders {
-		placeholders[i] = fmt.Sprintf("$%d", i+1)
-	}
-	placeholderStr := strings.Join(placeholders, ", ")
 
-	// Build ON CONFLICT clause
-	conflictCols := s.quotedColumnsList(tableInfo.PrimaryKey)
+	var conditions []string
+	var args []any
+	argIdx := 1
 
-	// Build UPDATE SET clause (exclude primary key columns)
-	var updateParts []string
-	for _, col := range tableInfo.Columns {
-		isPK := false
-		for _, pk := range tableInfo.PrimaryKey {
-			if col == pk {
-				isPK = true
-				break
-			}
+	for _, pk := range pkValues {
+		var pkConds []string
+		for i, col := range tableInfo.PrimaryKey {
+			pkConds = append(pkConds, fmt.Sprintf("%s = $%d", s.quotedColumnName(col), argIdx))
+			args = append(args, pk[i])
+			argIdx++
 		}
-		if !isPK {
-			quotedCol := s.quotedColumnName(col)
-			updateParts = append(updateParts, fmt.Sprintf("%s = EXCLUDED.%s", quotedCol, quotedCol))
-		}
+		conditions = append(conditions, "("+strings.Join(pkConds, " AND ")+")")
 	}
-	updateClause := strings.Join(updateParts, ", ")
 
-	query := fmt.Sprintf(`
-		INSERT INTO %s (%s) 
-		VALUES (%s) 
-		ON CONFLICT (%s) 
-		DO UPDATE SET %s`,
-		s.quotedTableName(tableInfo.Name), columns, placeholderStr, conflictCols, updateClause)
+	//nolint:gosec // G201 - table/column names are safely quoted and values remain parameterized
+	query := fmt.Sprintf("SELECT %s FROM %s WHERE %s",
+		columns,
+		s.quotedTableName(tableInfo.Name),
+		strings.Join(conditions, " OR "),
+	)
 
-	return query
+	rows, err := db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query rows by PK: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var result [][]any
+	for rows.Next() {
+		values := make([]any, len(tableInfo.Columns))
+		scanArgs := make([]any, len(tableInfo.Columns))
+		for i := range values {
+			scanArgs[i] = &values[i]
+		}
+		if err := rows.Scan(scanArgs...); err != nil {
+			return nil, fmt.Errorf("failed to scan row: %w", err)
+		}
+		result = append(result, values)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating rows: %w", err)
+	}
+
+	return result, nil
 }
 
 // buildPKWhereClause builds a WHERE clause for primary key matching
@@ -319,33 +337,35 @@ func (s *Syncer) quotedColumnsList(columns []string) string {
 
 // convertForCopy converts values to formats compatible with PostgreSQL COPY protocol.
 // Handles UUID byte arrays, numeric types, and other special cases.
-func convertForCopy(val any) any {
+func convertForCopy(val any, colType string) any {
 	if val == nil {
 		return nil
 	}
 
-	// Handle []byte that might be various types encoded as bytes
 	if b, ok := val.([]byte); ok {
+		if colType == "uuid" {
+			switch {
+			case len(b) == 16 && !isPrintableASCII(b):
+				return formatUUID(b)
+			default:
+				return string(b)
+			}
+		}
+
 		str := string(b)
 
-		// Check if it looks like a UUID string (36 chars with dashes in right places)
 		if len(str) == 36 && str[8] == '-' && str[13] == '-' && str[18] == '-' && str[23] == '-' {
 			return str
 		}
 
-		// Check if it's a binary 16-byte UUID (not a string)
-		// Only treat as UUID if bytes are NOT printable ASCII (real binary UUID)
 		if len(b) == 16 && !isPrintableASCII(b) {
 			return formatUUID(b)
 		}
 
-		// For printable ASCII byte arrays, they're string representations
-		// of values (numeric, text, arrays, json, etc.) - return as string
 		if len(b) > 0 && isPrintableASCII(b) {
 			return str
 		}
 
-		// For binary data (bytea), return as-is
 		return val
 	}
 

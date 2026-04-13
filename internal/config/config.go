@@ -18,14 +18,15 @@ type Config struct {
 	Schema         string              `json:"schema"`
 	IncludeTables  []string            `json:"includeTables"`
 	ExcludeTables  []string            `json:"excludeTables"`
-	IncludeColumns map[string][]string `json:"includeColumns"` // Table -> columns to sync (empty = all)
+	IncludeColumns map[string][]string `json:"includeColumns"`
 	TimestampCol   string              `json:"timestampColumn"`
 	Parallel       int                 `json:"parallel"`
 	BatchSize      int                 `json:"batchSize"`
 	Verbose        bool                `json:"verbose"`
 	Integrity      bool                `json:"integrity"`
+	IntegrityPath  string              `json:"integrityPath,omitempty"`
 	DryRun         bool                `json:"dryRun"`
-	Reconcile      bool                `json:"reconcile"` // Force full comparison by primary key, ignore timestamps
+	Reconcile      bool                `json:"reconcile"`
 
 	// Connection pool settings (optional, defaults are computed from Parallel)
 	MaxOpenConns    int           `json:"maxOpenConns,omitempty"`

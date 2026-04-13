@@ -22,7 +22,7 @@ import (
 	"github.com/koltyakov/pgsync/internal/config"
 	"github.com/koltyakov/pgsync/internal/constants"
 	"github.com/koltyakov/pgsync/internal/server"
-	"github.com/koltyakov/pgsync/internal/sync"
+	pgsync "github.com/koltyakov/pgsync/internal/syncer"
 )
 
 // Exit codes following Unix conventions
@@ -165,18 +165,18 @@ func run() int {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
-	syncer, err := sync.New(cfg)
+	s, err := pgsync.New(cfg)
 	if err != nil {
 		slog.Error("Failed to create syncer", "error", err)
 		return exitError
 	}
 	defer func() {
-		if closeErr := syncer.Close(); closeErr != nil {
+		if closeErr := s.Close(); closeErr != nil {
 			slog.Warn("Error closing syncer", "error", closeErr)
 		}
 	}()
 
-	if err := syncer.Sync(ctx); err != nil {
+	if err := s.Sync(ctx); err != nil {
 		if ctx.Err() != nil {
 			slog.Info("Sync interrupted by user")
 			return exitInterrupted
@@ -186,7 +186,7 @@ func run() int {
 	}
 
 	// Print summary
-	stats := syncer.GetStats()
+	stats := s.GetStats()
 	slog.Info("Sync completed successfully",
 		"totalUpserts", stats.TotalUpserts,
 		"totalDeletes", stats.TotalDeletes,

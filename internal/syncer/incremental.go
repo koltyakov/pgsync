@@ -1,4 +1,4 @@
-package sync //nolint:revive // intentionally shadows stdlib sync
+package syncer
 
 import (
 	"context"
@@ -43,11 +43,8 @@ func (s *Syncer) syncTableIncremental(ctx context.Context, tableInfo *table.Info
 
 		// Always check for deletions and missing rows when no new data
 		s.logger.Debug("Checking for row differences", "table", tableName)
-		if err := s.handleDeletedRows(ctx, tableInfo); err != nil {
-			return fmt.Errorf("failed to handle deleted rows: %w", err)
-		}
-		if err := s.handleMissingRows(ctx, tableInfo); err != nil {
-			return fmt.Errorf("failed to handle missing rows: %w", err)
+		if err := s.handleRowDifferences(ctx, tableInfo); err != nil {
+			return fmt.Errorf("failed to handle row differences: %w", err)
 		}
 
 		return nil
@@ -80,14 +77,8 @@ func (s *Syncer) syncTableIncremental(ctx context.Context, tableInfo *table.Info
 	// This ensures we catch any rows deleted from source while we were syncing
 	s.logger.Debug("Sync completed, checking for row differences", "table", tableName)
 
-	// Handle rows that exist in target but not in source (deletions)
-	if err := s.handleDeletedRows(ctx, tableInfo); err != nil {
-		return fmt.Errorf("failed to handle deleted rows: %w", err)
-	}
-
-	// Handle rows that exist in source but not in target (missing inserts)
-	if err := s.handleMissingRows(ctx, tableInfo); err != nil {
-		return fmt.Errorf("failed to handle missing rows: %w", err)
+	if err := s.handleRowDifferences(ctx, tableInfo); err != nil {
+		return fmt.Errorf("failed to handle row differences: %w", err)
 	}
 
 	return nil
@@ -125,7 +116,9 @@ func (s *Syncer) getMaxTimestampFromTarget(ctx context.Context, tableName string
 		s.quotedColumnName(s.cfg.TimestampCol), s.quotedTableName(tableName))
 
 	var maxTS time.Time
-	err := s.targetDB.QueryRowContext(ctx, query).Scan(&maxTS)
+	err := retry(ctx, func() error {
+		return s.targetDB.QueryRowContext(ctx, query).Scan(&maxTS)
+	})
 	if err != nil {
 		// If table doesn't exist in target, return zero time
 		if strings.Contains(err.Error(), "does not exist") || strings.Contains(err.Error(), "relation") {
