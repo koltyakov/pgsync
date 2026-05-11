@@ -24,7 +24,7 @@ func (s *Syncer) integrityPath() string {
 // The output path defaults to "integrity.csv" in the current working directory
 // and can be configured via the IntegrityPath config option.
 // If the file exists, it will be overwritten.
-func (s *Syncer) writeIntegrityCSV(ctx context.Context, tables []*table.Info) error {
+func (s *Syncer) writeIntegrityCSV(ctx context.Context, tables []*table.Info) (retErr error) {
 	// Defensive: validate input
 	if tables == nil {
 		return fmt.Errorf("tables slice is nil")
@@ -36,13 +36,11 @@ func (s *Syncer) writeIntegrityCSV(ctx context.Context, tables []*table.Info) er
 		return fmt.Errorf("failed to create %s: %w", integrityPath, err)
 	}
 
-	var closeErr error
 	defer func() {
-		if syncErr := f.Sync(); syncErr != nil && closeErr == nil {
-			closeErr = fmt.Errorf("failed to sync %s: %w", integrityPath, syncErr)
-		}
-		if err := f.Close(); err != nil && closeErr == nil {
-			closeErr = fmt.Errorf("failed to close %s: %w", integrityPath, err)
+		if f != nil {
+			if err := f.Close(); err != nil && retErr == nil {
+				retErr = fmt.Errorf("failed to close %s: %w", integrityPath, err)
+			}
 		}
 	}()
 
@@ -134,7 +132,15 @@ func (s *Syncer) writeIntegrityCSV(ctx context.Context, tables []*table.Info) er
 		return fmt.Errorf("failed to flush csv writer: %w", err)
 	}
 
-	return closeErr
+	if err := f.Sync(); err != nil {
+		return fmt.Errorf("failed to sync %s: %w", integrityPath, err)
+	}
+	if err := f.Close(); err != nil {
+		return fmt.Errorf("failed to close %s: %w", integrityPath, err)
+	}
+	f = nil
+
+	return nil
 }
 
 // matchStatus returns "Yes", "No", or empty string based on whether values match.

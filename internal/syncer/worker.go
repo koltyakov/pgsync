@@ -14,6 +14,8 @@ import (
 	"github.com/koltyakov/pgsync/internal/table"
 )
 
+const zeroDurationString = "0ms"
+
 // Sync performs the synchronization process
 func (s *Syncer) Sync(ctx context.Context) error {
 	start := time.Now()
@@ -248,6 +250,10 @@ func (s *Syncer) levelWorkerWithIndex(ctx context.Context, _ int, workChan <-cha
 			if !ok {
 				return // Channel closed
 			}
+
+			// Notify progress handler of table start before any table-specific log events.
+			s.progress.OnTableStart(work.info.Name, work.index)
+
 			// Filter columns if specified in config
 			tableInfo := work.info
 			originalColumns := work.info.Columns
@@ -271,9 +277,6 @@ func (s *Syncer) levelWorkerWithIndex(ctx context.Context, _ int, workChan <-cha
 					"columns", fmt.Sprintf("%d/%d", len(tableInfo.Columns), originalColCount))
 				s.progress.OnPartialSync(work.info.Name, tableInfo.Columns, ignoredCols, "columns missing in target")
 			}
-
-			// Notify progress handler of table start
-			s.progress.OnTableStart(tableInfo.Name, work.index)
 
 			if err := s.syncTable(ctx, tableInfo); err != nil {
 				s.logger.Error("Error syncing table", "table", tableInfo.Name, "error", err)
@@ -386,17 +389,25 @@ func topologicalSort(tables []string, deps []db.TableDependency, tableSet map[st
 // groupByDependencyLevel groups tables into levels where tables in the same level
 // have no dependencies on each other and can be synced in parallel
 func groupByDependencyLevel(tableInfos []*table.Info, deps []db.TableDependency, tableSet map[string]struct{}) [][]*table.Info {
-	if len(deps) == 0 || len(tableInfos) == 0 {
-		// No dependencies - all tables can be synced in parallel
+	if len(tableInfos) == 0 {
+		return nil
+	}
+	if len(deps) == 0 {
 		return [][]*table.Info{tableInfos}
 	}
 
-	// Build dependency map
+	infoMap := make(map[string]*table.Info, len(tableInfos))
+	for _, info := range tableInfos {
+		infoMap[info.Name] = info
+	}
+
 	dependsOn := make(map[string]map[string]struct{})
 	for _, dep := range deps {
 		_, tableInSet := tableSet[dep.Table]
 		_, dependsOnInSet := tableSet[dep.DependsOn]
-		if tableInSet && dependsOnInSet {
+		_, tableHasInfo := infoMap[dep.Table]
+		_, dependsOnHasInfo := infoMap[dep.DependsOn]
+		if tableInSet && dependsOnInSet && tableHasInfo && dependsOnHasInfo {
 			if dependsOn[dep.Table] == nil {
 				dependsOn[dep.Table] = make(map[string]struct{})
 			}
@@ -404,62 +415,49 @@ func groupByDependencyLevel(tableInfos []*table.Info, deps []db.TableDependency,
 		}
 	}
 
-	// Build table info map for lookup
-	infoMap := make(map[string]*table.Info)
+	remaining := make(map[string]struct{}, len(tableInfos))
 	for _, info := range tableInfos {
-		infoMap[info.Name] = info
+		remaining[info.Name] = struct{}{}
 	}
 
-	// Assign levels - a table's level is 1 + max level of its dependencies
-	levels := make(map[string]int)
-	var assignLevel func(tableName string) int
-	assignLevel = func(tableName string) int {
-		if level, ok := levels[tableName]; ok {
-			return level
-		}
+	levels := make([][]*table.Info, 0)
+	for len(remaining) > 0 {
+		level := make([]*table.Info, 0)
+		for _, info := range tableInfos {
+			if _, ok := remaining[info.Name]; !ok {
+				continue
+			}
 
-		maxDepLevel := -1
-		for dep := range dependsOn[tableName] {
-			if _, exists := tableSet[dep]; exists {
-				depLevel := assignLevel(dep)
-				if depLevel > maxDepLevel {
-					maxDepLevel = depLevel
+			hasRemainingDependency := false
+			for dep := range dependsOn[info.Name] {
+				if _, ok := remaining[dep]; ok {
+					hasRemainingDependency = true
+					break
 				}
+			}
+			if !hasRemainingDependency {
+				level = append(level, info)
 			}
 		}
 
-		levels[tableName] = maxDepLevel + 1
-		return levels[tableName]
-	}
-
-	// Calculate level for each table
-	for _, info := range tableInfos {
-		assignLevel(info.Name)
-	}
-
-	// Group by level
-	maxLevel := 0
-	for _, level := range levels {
-		if level > maxLevel {
-			maxLevel = level
+		if len(level) == 0 {
+			// Circular dependencies: process the remaining tables together rather than recursing forever.
+			for _, info := range tableInfos {
+				if _, ok := remaining[info.Name]; ok {
+					level = append(level, info)
+				}
+			}
+			levels = append(levels, level)
+			break
 		}
-	}
 
-	result := make([][]*table.Info, maxLevel+1)
-	for _, info := range tableInfos {
-		level := levels[info.Name]
-		result[level] = append(result[level], info)
-	}
-
-	// Remove empty levels
-	var filtered [][]*table.Info
-	for _, level := range result {
-		if len(level) > 0 {
-			filtered = append(filtered, level)
+		for _, info := range level {
+			delete(remaining, info.Name)
 		}
+		levels = append(levels, level)
 	}
 
-	return filtered
+	return levels
 }
 
 // getTablesList returns the list of tables to sync based on include/exclude filters
@@ -517,7 +515,7 @@ func formatHumanDuration(d time.Duration) string {
 	}
 	msTotal := d.Milliseconds()
 	if msTotal == 0 {
-		return "0ms"
+		return zeroDurationString
 	}
 	const (
 		msPerSecond = int64(1000)
@@ -545,7 +543,7 @@ func formatHumanDuration(d time.Duration) string {
 		parts = append(parts, strconv.FormatInt(ms, 10)+"ms")
 	}
 	if len(parts) == 0 {
-		return "0ms"
+		return zeroDurationString
 	}
 	return strings.Join(parts, "")
 }

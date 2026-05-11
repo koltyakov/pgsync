@@ -1,3 +1,4 @@
+//nolint:goconst // repeated test fixture strings are more readable inline
 package table
 
 import "testing"

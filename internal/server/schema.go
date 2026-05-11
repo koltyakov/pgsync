@@ -262,7 +262,7 @@ func (s *Server) writeError(w http.ResponseWriter, message string, err error, st
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(map[string]string{
-		"error":   message,
-		"details": err.Error(),
+		messageTypeError: message,
+		"details":        err.Error(),
 	})
 }

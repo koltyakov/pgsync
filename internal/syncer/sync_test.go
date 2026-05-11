@@ -1,3 +1,4 @@
+//nolint:goconst // repeated test fixture strings are more readable inline
 package syncer
 
 import (
@@ -316,6 +317,49 @@ func TestRowsEqual(t *testing.T) {
 	}
 }
 
+func TestChangedRowsDetectsUpdatesAndMissingTargetRows(t *testing.T) {
+	s := &Syncer{}
+	info := &table.Info{
+		Name:       "users",
+		Columns:    []string{"id", "name", "email"},
+		PrimaryKey: []string{"id"},
+	}
+
+	sourceRows := [][]any{
+		{1, "Alice", "alice@example.com"},
+		{2, "Bob", "bob-new@example.com"},
+		{3, "Cara", "cara@example.com"},
+	}
+	targetRows := [][]any{
+		{1, "Alice", "alice@example.com"},
+		{2, "Bob", "bob-old@example.com"},
+	}
+
+	changedRows, err := s.changedRows(info, sourceRows, targetRows)
+	if err != nil {
+		t.Fatalf("changedRows returned error: %v", err)
+	}
+	if len(changedRows) != 2 {
+		t.Fatalf("expected 2 changed rows, got %d", len(changedRows))
+	}
+	if changedRows[0][0] != 2 || changedRows[1][0] != 3 {
+		t.Fatalf("expected changed PKs [2 3], got [%v %v]", changedRows[0][0], changedRows[1][0])
+	}
+}
+
+func TestChangedRowsRequiresPKColumnsInSelectedColumns(t *testing.T) {
+	s := &Syncer{}
+	info := &table.Info{
+		Name:       "users",
+		Columns:    []string{"name"},
+		PrimaryKey: []string{"id"},
+	}
+
+	if _, err := s.changedRows(info, [][]any{{"Alice"}}, nil); err == nil {
+		t.Fatal("expected error for missing primary key column")
+	}
+}
+
 func TestFormatHumanDuration(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -504,6 +548,18 @@ func TestGroupByDependencyLevel(t *testing.T) {
 				{Table: "child2", DependsOn: "parent"},
 			},
 			expectedLevels: 2, // parent at level 0, both children at level 1
+		},
+		{
+			name: "cycle falls back to one level",
+			tables: []*table.Info{
+				{Name: "a"},
+				{Name: "b"},
+			},
+			deps: []db.TableDependency{
+				{Table: "a", DependsOn: "b"},
+				{Table: "b", DependsOn: "a"},
+			},
+			expectedLevels: 1,
 		},
 	}
 

@@ -10,17 +10,18 @@ import (
 func (s *Syncer) syncTableReconcile(ctx context.Context, tableInfo *table.Info) error {
 	tableName := tableInfo.Name
 
-	diff, err := s.diffPKs(ctx, tableInfo)
+	diff, err := s.diffPKs(ctx, tableInfo, true)
 	if err != nil {
 		return fmt.Errorf("failed to diff PKs: %w", err)
 	}
 
-	totalSource := len(diff.missing) + len(diff.extra)
+	totalSource := len(diff.missing) + len(diff.common)
 	s.logger.Debug("Reconciliation: comparing primary keys",
 		"table", tableName,
 		"totalPKs", totalSource,
 		"missing", len(diff.missing),
 		"extra", len(diff.extra),
+		"common", len(diff.common),
 	)
 
 	if len(diff.missing) > 0 {
@@ -56,6 +57,16 @@ func (s *Syncer) syncTableReconcile(ctx context.Context, tableInfo *table.Info) 
 				"batch", len(batch),
 				"progress", fmt.Sprintf("%d/%d", end, len(missingPKs)),
 			)
+		}
+	}
+
+	if len(diff.common) > 0 {
+		changed, err := s.syncChangedRows(ctx, tableInfo, diff.common)
+		if err != nil {
+			return fmt.Errorf("failed to sync changed rows: %w", err)
+		}
+		if changed > 0 {
+			s.logger.Debug("Reconciliation: synced changed rows", "table", tableName, "changed", changed)
 		}
 	}
 

@@ -12,9 +12,10 @@ import (
 type pkDiff struct {
 	missing map[string][]any
 	extra   map[string][]any
+	common  map[string][]any
 }
 
-func (s *Syncer) diffPKs(ctx context.Context, tableInfo *table.Info) (*pkDiff, error) {
+func (s *Syncer) diffPKs(ctx context.Context, tableInfo *table.Info, includeCommon bool) (*pkDiff, error) {
 	if ctx.Err() != nil {
 		return nil, ctx.Err()
 	}
@@ -46,8 +47,16 @@ func (s *Syncer) diffPKs(ctx context.Context, tableInfo *table.Info) (*pkDiff, e
 	}
 
 	missing := make(map[string][]any)
+	var common map[string][]any
+	if includeCommon {
+		common = make(map[string][]any)
+	}
 	for pk, vals := range sourcePKs {
-		if _, exists := targetPKs[pk]; !exists {
+		if _, exists := targetPKs[pk]; exists {
+			if includeCommon {
+				common[pk] = vals
+			}
+		} else {
 			missing[pk] = vals
 		}
 	}
@@ -59,7 +68,7 @@ func (s *Syncer) diffPKs(ctx context.Context, tableInfo *table.Info) (*pkDiff, e
 		}
 	}
 
-	return &pkDiff{missing: missing, extra: extra}, nil
+	return &pkDiff{missing: missing, extra: extra, common: common}, nil
 }
 
 func (s *Syncer) fetchPKs(ctx context.Context, db *sql.DB, tableInfo *table.Info) (map[string][]any, error) {
@@ -102,7 +111,7 @@ func (s *Syncer) handleRowDifferences(ctx context.Context, tableInfo *table.Info
 		return nil
 	}
 
-	diff, err := s.diffPKs(ctx, tableInfo)
+	diff, err := s.diffPKs(ctx, tableInfo, false)
 	if err != nil {
 		return err
 	}
@@ -156,4 +165,113 @@ func (s *Syncer) handleRowDifferences(ctx context.Context, tableInfo *table.Info
 	}
 
 	return nil
+}
+
+func (s *Syncer) syncChangedRows(ctx context.Context, tableInfo *table.Info, commonPKs map[string][]any) (int, error) {
+	if len(commonPKs) == 0 {
+		return 0, nil
+	}
+
+	pkValues := make([][]any, 0, len(commonPKs))
+	for _, vals := range commonPKs {
+		pkValues = append(pkValues, vals)
+	}
+
+	batchSize := s.cfg.BatchSize
+	changedCount := 0
+	for i := 0; i < len(pkValues); i += batchSize {
+		if ctx.Err() != nil {
+			return changedCount, ctx.Err()
+		}
+
+		end := i + batchSize
+		if end > len(pkValues) {
+			end = len(pkValues)
+		}
+		batch := pkValues[i:end]
+
+		sourceRows, err := s.fetchRowsByPK(ctx, s.sourceDB, tableInfo, batch)
+		if err != nil {
+			return changedCount, fmt.Errorf("failed to fetch source rows for comparison: %w", err)
+		}
+		targetRows, err := s.fetchRowsByPK(ctx, s.targetDB, tableInfo, batch)
+		if err != nil {
+			return changedCount, fmt.Errorf("failed to fetch target rows for comparison: %w", err)
+		}
+
+		changedRows, err := s.changedRows(tableInfo, sourceRows, targetRows)
+		if err != nil {
+			return changedCount, err
+		}
+		if len(changedRows) == 0 {
+			continue
+		}
+
+		if err := s.upsertData(ctx, tableInfo, changedRows); err != nil {
+			return changedCount, fmt.Errorf("failed to upsert changed rows: %w", err)
+		}
+		changedCount += len(changedRows)
+	}
+
+	return changedCount, nil
+}
+
+func (s *Syncer) changedRows(tableInfo *table.Info, sourceRows, targetRows [][]any) ([][]any, error) {
+	colIdx, err := columnIndexForPK(tableInfo)
+	if err != nil {
+		return nil, err
+	}
+
+	targetByPK := make(map[string][]any, len(targetRows))
+	for _, row := range targetRows {
+		pk, err := s.pkStringFromRow(tableInfo, row, colIdx)
+		if err != nil {
+			return nil, err
+		}
+		targetByPK[pk] = row
+	}
+
+	changed := make([][]any, 0)
+	for _, row := range sourceRows {
+		pk, err := s.pkStringFromRow(tableInfo, row, colIdx)
+		if err != nil {
+			return nil, err
+		}
+		targetRow, ok := targetByPK[pk]
+		if !ok || !rowsEqual(row, targetRow) {
+			changed = append(changed, row)
+		}
+	}
+
+	return changed, nil
+}
+
+func columnIndexForPK(tableInfo *table.Info) (map[string]int, error) {
+	if tableInfo == nil {
+		return nil, fmt.Errorf("tableInfo is nil")
+	}
+
+	colIdx := make(map[string]int, len(tableInfo.Columns))
+	for i, col := range tableInfo.Columns {
+		colIdx[col] = i
+	}
+	for _, pk := range tableInfo.PrimaryKey {
+		if _, ok := colIdx[pk]; !ok {
+			return nil, fmt.Errorf("primary key column %q not found in table %q columns", pk, tableInfo.Name)
+		}
+	}
+
+	return colIdx, nil
+}
+
+func (s *Syncer) pkStringFromRow(tableInfo *table.Info, row []any, colIdx map[string]int) (string, error) {
+	pkVals := make([]any, len(tableInfo.PrimaryKey))
+	for i, pk := range tableInfo.PrimaryKey {
+		idx := colIdx[pk]
+		if idx >= len(row) {
+			return "", fmt.Errorf("row for table %q has %d columns, primary key %q needs index %d", tableInfo.Name, len(row), pk, idx)
+		}
+		pkVals[i] = row[idx]
+	}
+	return s.createPKString(pkVals), nil
 }

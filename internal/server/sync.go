@@ -8,10 +8,22 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/koltyakov/pgsync/internal/config"
 	"github.com/koltyakov/pgsync/internal/syncer"
+)
+
+const (
+	syncStepInitializing = "Initializing..."
+	messageTypeProgress  = "progress"
+	messageTypeLog       = "log"
+	messageTypeError     = "error"
+	messageTypeComplete  = "complete"
+	messageLevelInfo     = "info"
+	messageLevelDebug    = "debug"
+	messageLevelWarn     = "warn"
 )
 
 // SyncRequest contains the sync configuration from the UI
@@ -41,15 +53,6 @@ func (s *Server) handleStartSync(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Check if sync is already running
-	s.mu.Lock()
-	if s.syncState.Running {
-		s.mu.Unlock()
-		http.Error(w, "Sync already in progress", http.StatusConflict)
-		return
-	}
-	s.mu.Unlock()
-
 	// Parse request
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
@@ -64,6 +67,21 @@ func (s *Server) handleStartSync(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+
+	s.mu.Lock()
+	if s.syncState.Running {
+		s.mu.Unlock()
+		http.Error(w, "Sync already in progress", http.StatusConflict)
+		return
+	}
+	s.syncState = &SyncState{
+		Running:     true,
+		StartedAt:   time.Now(),
+		CurrentStep: syncStepInitializing,
+		Progress:    0,
+		Tables:      req.Tables,
+	}
+	s.mu.Unlock()
 
 	// Start sync in background with server context for graceful shutdown
 	// Note: We use serverCtx, not r.Context(), because the sync outlives the HTTP request
@@ -100,21 +118,26 @@ func (s *Server) handleSyncStatus(w http.ResponseWriter, r *http.Request) {
 
 // runSync executes the sync operation with progress reporting
 func (s *Server) runSync(parentCtx context.Context, req SyncRequest) {
-	// Set initial state
 	s.mu.Lock()
-	s.syncState = &SyncState{
-		Running:     true,
-		StartedAt:   time.Now(),
-		CurrentStep: "Initializing...",
-		Progress:    0,
-		Tables:      req.Tables,
+	if s.syncState == nil || !s.syncState.Running {
+		s.syncState = &SyncState{
+			Running:     true,
+			StartedAt:   time.Now(),
+			CurrentStep: syncStepInitializing,
+			Progress:    0,
+			Tables:      req.Tables,
+		}
+	} else {
+		s.syncState.CurrentStep = syncStepInitializing
+		s.syncState.Progress = 0
+		s.syncState.Tables = req.Tables
 	}
 	s.mu.Unlock()
 
 	s.broadcast(ProgressMessage{
-		Type:    "progress",
+		Type:    messageTypeProgress,
 		Message: "Starting sync operation...",
-		Level:   "info",
+		Level:   messageLevelInfo,
 	})
 
 	// Build config
@@ -183,9 +206,9 @@ func (s *Server) runSync(parentCtx context.Context, req SyncRequest) {
 
 	stats := syncInstance.GetStats()
 	s.broadcast(ProgressMessage{
-		Type:     "complete",
+		Type:     messageTypeComplete,
 		Message:  "Sync completed successfully",
-		Level:    "info",
+		Level:    messageLevelInfo,
 		Progress: 100,
 		Stats: &SyncStats{
 			TotalUpserts: stats.TotalUpserts,
@@ -211,38 +234,50 @@ func (s *Server) syncError(err error) {
 	s.mu.Unlock()
 
 	s.broadcast(ProgressMessage{
-		Type:    "error",
+		Type:    messageTypeError,
 		Message: err.Error(),
-		Level:   "error",
+		Level:   messageTypeError,
 	})
 }
 
 // webProgressHandler implements syncer.ProgressHandler for WebSocket updates
 type webProgressHandler struct {
-	server      *Server
-	totalTables int
-	tableIndex  int
+	server       *Server
+	totalTables  int
+	mu           sync.Mutex
+	tableIndexes map[string]int
 }
 
 func (h *webProgressHandler) OnStart(tables []string) {
+	h.mu.Lock()
 	h.totalTables = len(tables)
+	h.tableIndexes = make(map[string]int, len(tables))
+	h.mu.Unlock()
+
 	h.server.mu.Lock()
 	h.server.syncState.Tables = tables
 	h.server.mu.Unlock()
 
 	h.server.broadcast(ProgressMessage{
-		Type:        "progress",
+		Type:        messageTypeProgress,
 		Message:     fmt.Sprintf("Starting sync of %d tables", len(tables)),
-		Level:       "info",
+		Level:       messageLevelInfo,
 		TotalTables: len(tables),
 	})
 }
 
 func (h *webProgressHandler) OnTableStart(table string, index int) {
-	h.tableIndex = index
+	h.mu.Lock()
+	if h.tableIndexes == nil {
+		h.tableIndexes = make(map[string]int)
+	}
+	h.tableIndexes[table] = index
+	totalTables := h.totalTables
+	h.mu.Unlock()
+
 	var progress float64
-	if h.totalTables > 0 {
-		progress = float64(index) / float64(h.totalTables) * 100
+	if totalTables > 0 {
+		progress = float64(index) / float64(totalTables) * 100
 	}
 
 	h.server.mu.Lock()
@@ -252,17 +287,24 @@ func (h *webProgressHandler) OnTableStart(table string, index int) {
 	h.server.mu.Unlock()
 
 	h.server.broadcast(ProgressMessage{
-		Type:        "progress",
+		Type:        messageTypeProgress,
 		Message:     "Started synchronization",
-		Level:       "info",
+		Level:       messageLevelInfo,
 		Progress:    progress,
 		Table:       table,
 		TableIndex:  index,
-		TotalTables: h.totalTables,
+		TotalTables: totalTables,
 	})
 }
 
+func (h *webProgressHandler) indexForTable(table string) (int, int) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.tableIndexes[table], h.totalTables
+}
+
 func (h *webProgressHandler) OnPartialSync(table string, _, ignoredCols []string, reason string) {
+	tableIndex, totalTables := h.indexForTable(table)
 	var colsInfo string
 	if len(ignoredCols) > 5 {
 		colsInfo = fmt.Sprintf("%d columns", len(ignoredCols))
@@ -270,40 +312,41 @@ func (h *webProgressHandler) OnPartialSync(table string, _, ignoredCols []string
 		colsInfo = strings.Join(ignoredCols, ", ")
 	}
 	h.server.broadcast(ProgressMessage{
-		Type:        "log",
+		Type:        messageTypeLog,
 		Message:     fmt.Sprintf("Partial sync (%s): ignoring %s", reason, colsInfo),
-		Level:       "warn",
+		Level:       messageLevelWarn,
 		Table:       table,
-		TableIndex:  h.tableIndex,
-		TotalTables: h.totalTables,
+		TableIndex:  tableIndex,
+		TotalTables: totalTables,
 	})
 }
 
 func (h *webProgressHandler) OnTableComplete(table string, upserts, deletes int64) {
+	tableIndex, totalTables := h.indexForTable(table)
 	h.server.broadcast(ProgressMessage{
-		Type:        "log",
+		Type:        messageTypeLog,
 		Message:     fmt.Sprintf("Completed: %d upserts, %d deletes", upserts, deletes),
-		Level:       "info",
+		Level:       messageLevelInfo,
 		Table:       table,
-		TableIndex:  h.tableIndex,
-		TotalTables: h.totalTables,
+		TableIndex:  tableIndex,
+		TotalTables: totalTables,
 	})
 }
 
 func (h *webProgressHandler) OnLog(level, message string) {
 	// Map slog levels to our levels
-	lvl := "info"
+	lvl := messageLevelInfo
 	switch level {
 	case slog.LevelDebug.String():
-		lvl = "debug"
+		lvl = messageLevelDebug
 	case slog.LevelWarn.String():
-		lvl = "warn"
+		lvl = messageLevelWarn
 	case slog.LevelError.String():
-		lvl = "error"
+		lvl = messageTypeError
 	}
 
 	h.server.broadcast(ProgressMessage{
-		Type:    "log",
+		Type:    messageTypeLog,
 		Message: message,
 		Level:   lvl,
 	})
@@ -316,9 +359,9 @@ func (h *webProgressHandler) OnComplete(totalUpserts, totalDeletes int64) {
 	h.server.mu.Unlock()
 
 	h.server.broadcast(ProgressMessage{
-		Type:     "complete",
+		Type:     messageTypeComplete,
 		Message:  fmt.Sprintf("Sync complete: %d upserts, %d deletes", totalUpserts, totalDeletes),
-		Level:    "info",
+		Level:    messageLevelInfo,
 		Progress: progress,
 		Stats: &SyncStats{
 			TotalUpserts: totalUpserts,
